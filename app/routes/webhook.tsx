@@ -4,7 +4,7 @@ import type { PlexWebhookEvent } from "../../types.js";
 import { getUserByPlexId } from "../lib/database.js";
 import { getUserPassword } from "../lib/password.js";
 import type { WebhookSettings } from "../lib/schema.js";
-import { parseMultipartRequest } from '@remix-run/multipart-parser';
+import { MultipartParseError, parseMultipartRequest } from '@remix-run/multipart-parser';
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method !== "POST") {
@@ -21,36 +21,46 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (contentType.includes('multipart/form-data')) {
       console.log('Parsing multipart request...');
-      const partsGenerator = parseMultipartRequest(request);
+      try {
+        let payloadPart = null;
+        let thumbnailPart = null;
+        let partCount = 0;
 
-      let payloadPart = null;
-      let thumbnailPart = null;
-
-      for await (const part of partsGenerator) {
-        if (part.name === 'payload') {
-          payloadPart = part;
-        } else if (part.filename && part.filename.endsWith('.jpg')) {
-          thumbnailPart = part;
+        for await (const part of parseMultipartRequest(request)) {
+          partCount++;
+          if (part.name === 'payload') {
+            payloadPart = part;
+          } else if (part.filename && part.filename.endsWith('.jpg')) {
+            thumbnailPart = part;
+          }
         }
-      }
 
-      if (!payloadPart) {
-        throw new Error('No payload part found in multipart request');
-      }
 
-      const payloadText = payloadPart.text;
-      eventData = JSON.parse(payloadText) as PlexWebhookEvent;
+        if (!payloadPart) {
+          throw new Error('No payload part found in multipart request');
+        }
 
-      if (thumbnailPart) {
-        thumbnail = Buffer.from(thumbnailPart.bytes);
-        console.log(`Received thumbnail: ${thumbnail.length} bytes`);
+        const payloadText = payloadPart.text;
+
+        eventData = JSON.parse(payloadText) as PlexWebhookEvent;
+
+        if (thumbnailPart) {
+          thumbnail = Buffer.from(thumbnailPart.bytes);
+        }
+      } catch (multipartError) {
+        console.error('Error parsing multipart request:', multipartError);
+        console.error('Content-Type:', contentType);
+        console.error('Request headers:', Object.fromEntries(request.headers.entries()));
+        throw multipartError;
       }
     } else {
+      console.log('Processing regular JSON request...');
       eventData = await request.json().then(data => data as PlexWebhookEvent);
     }
 
     if (!eventData || (eventData.event !== 'media.scrobble' && eventData.event !== 'media.rate')) {
-      return Response.json({ message: 'Invalid webhook data' }, { status: 400 });
+      console.error('Invalid webhook data, event type:', eventData.event);
+      return Response.json({ message: 'Invalid webhook data', event: eventData?.event }, { status: 200 });
     }
 
     console.log('🐛 [DEBUG] Event Data:', eventData);
@@ -97,7 +107,12 @@ export async function action({ request }: ActionFunctionArgs) {
       return Response.json({ message: 'Event not enabled or handled', event }, { status: 200 });
     }
   } catch (error) {
+    if (error instanceof MultipartParseError) {
+      console.error('Failed to parse multipart request:', error.message);
+    } else {
     console.error('Error processing Plex event:', error);
+    }
+
     return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
