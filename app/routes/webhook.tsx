@@ -12,8 +12,13 @@ export async function action({ request }: ActionFunctionArgs) {
 
   try {
     console.log('Processing Plex webhook...');
-    const eventData: PlexWebhookEvent = await request.json().then(data => data as PlexWebhookEvent);
-    console.log('🐛 [DEBUG] Event Data:',eventData);
+    const eventData: PlexWebhookEvent = await request.json().then(data => data as PlexWebhookEvent)
+
+    if (!eventData || (eventData.event !== 'media.scrobble' && eventData.event !== 'media.rate')) {
+      return Response.json({ message: 'Invalid webhook data' }, { status: 400 });
+    }
+
+    console.log('🐛 [DEBUG] Event Data:', eventData);
 
     const user = await getUserByPlexId(eventData.Account?.id?.toString());
 
