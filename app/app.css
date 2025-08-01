@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+html, body {
+  font-family: "Courier New", monospace;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  min-height: 100vh;
+}
+
+/* Main container for consistent layout */
+.app-container {
+  @apply min-h-screen flex items-center justify-center px-4 py-8;
+}
+
+.content-wrapper {
+  @apply w-full max-w-2xl mx-auto space-y-6;
+}
+
+/* Modern 90s aesthetic improvements */
+.retro-card {
+  @apply bg-white border-2 border-gray-800 rounded-lg;
+  box-shadow: 6px 6px 0px #000, 12px 12px 0px rgba(0,0,0,0.08);
+  transition: all 0.3s ease;
+}
+
+.retro-card:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 8px 8px 0px #000, 14px 14px 0px rgba(0,0,0,0.08);
+}
+
+.retro-button {
+  @apply border-2 border-gray-800 font-bold transition-all duration-200 ease-in-out rounded-lg;
+  box-shadow: 4px 4px 0px #000;
+  position: relative;
+}
+
+.retro-button:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px #000;
+}
+
+.retro-button:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px #000;
+}
+
+.retro-input {
+  @apply border-2 border-gray-800 bg-white font-mono rounded-lg;
+  box-shadow: inset 2px 2px 6px rgba(0,0,0,0.1);
+  transition: all 0.2s ease;
+}
+
+.retro-input:focus {
+  @apply outline-none;
+  box-shadow: inset 2px 2px 6px rgba(0,0,0,0.1), 0 0 0 3px #3b82f6;
+}
+
+.retro-alert {
+  @apply border-2 border-gray-800 font-bold rounded-lg;
+  box-shadow: 3px 3px 0px #000;
+}
+
+.gradient-text {
+  background: linear-gradient(45deg, #1f2937, #374151);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-title {
+  @apply text-4xl md:text-5xl font-bold mb-6 text-center;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+}
+
+.section-spacing {
+  @apply space-y-6;
+}
+
+.button-grid {
+  @apply grid gap-4;
+}
+
+@media (min-width: 768px) {
+  .button-grid {
+    @apply grid-cols-2;
+  }
+}
