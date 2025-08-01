@@ -7,6 +7,7 @@
         "@react-router/fs-routes": "^7.7.1",
         "@react-router/node": "^7.0.2",
         "@react-router/serve": "^7.0.2",
+        "@remix-run/multipart-parser": "^0.11.0",
         "@sparticuz/chromium": "^138.0.2",
         "@supabase/supabase-js": "^2.39.0",
         "@tailwindcss/vite": "^4.1.11",
@@ -187,6 +188,10 @@
     "@react-router/node": ["@react-router/node@7.7.1", "", { "dependencies": { "@mjackson/node-fetch-server": "^0.2.0" }, "peerDependencies": { "react-router": "7.7.1", "typescript": "^5.1.0" }, "optionalPeers": ["typescript"] }, "sha512-EHd6PEcw2nmcJmcYTPA0MmRWSqOaJ/meycfCp0ADA9T/6b7+fUHfr9XcNyf7UeZtYwu4zGyuYfPmLU5ic6Ugyg=="],
 
     "@react-router/serve": ["@react-router/serve@7.7.1", "", { "dependencies": { "@react-router/express": "7.7.1", "@react-router/node": "7.7.1", "compression": "^1.7.4", "express": "^4.19.2", "get-port": "5.1.1", "morgan": "^1.10.0", "source-map-support": "^0.5.21" }, "peerDependencies": { "react-router": "7.7.1" }, "bin": { "react-router-serve": "bin.js" } }, "sha512-LyAiX+oI+6O6j2xWPUoKW+cgayUf3USBosSMv73Jtwi99XUhSDu2MUhM+BB+AbrYRubauZ83QpZTROiXoaf8jA=="],
+
+    "@remix-run/headers": ["@remix-run/headers@0.12.0", "", {}, "sha512-eqVSL5UOIyqVx0NTqgtNKMKVokE9jPchkZHl/N13KKPQYw/leS8VCoX5zRhkB1UvcLyfj113LX0OvEcuNbc5Hg=="],
+
+    "@remix-run/multipart-parser": ["@remix-run/multipart-parser@0.11.0", "", { "dependencies": { "@remix-run/headers": "^0.12.0" } }, "sha512-AE/H+ok0fWOZb84sJ8vREOJiSwYoEoGL0rpHZSAiPmCkBKbnsmHCbiUtg5+wELem4Q0HAEY6vjVK83u9cIlAhw=="],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.46.2", "", { "os": "android", "cpu": "arm" }, "sha512-Zj3Hl6sN34xJtMv7Anwb5Gu01yujyE/cLBDB2gnHTAHaWS1Z38L7kuSG+oAh0giZMqG060f/YBStXtMH6FvPMA=="],
 
