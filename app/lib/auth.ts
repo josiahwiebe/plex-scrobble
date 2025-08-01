@@ -19,6 +19,7 @@ export async function getPlexAuthUrl(request: Request): Promise<{ authUrl: strin
       'strong': 'true',
       'X-Plex-Product': 'Plex Scrobbler',
       'X-Plex-Client-Identifier': process.env.PLEX_CLIENT_ID!,
+      'X-Plex-Device-Name': 'Plex Scrobbler',
     }),
   });
 
@@ -45,6 +46,8 @@ export async function getPlexAuthUrl(request: Request): Promise<{ authUrl: strin
     'code': code,
     'forwardUrl': process.env.PLEX_REDIRECT_URI || "http://localhost:5173/auth/plex/callback",
     'context[device][product]': 'Plex Scrobbler',
+    'context[device][platform]': 'web',
+    'context[device][device]': 'Plex Scrobbler',
   });
 
   const authUrl = `https://app.plex.tv/auth#?${authUrlParams.toString()}`;
