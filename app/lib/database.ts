@@ -2,6 +2,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq, and, gt, lt } from "drizzle-orm";
 import { users, plexPins, type User, type NewUser, type PlexPin } from "./schema.js";
+import { randomBytes } from "crypto";
 
 const connectionString = process.env.DATABASE_URL!;
 const client = postgres(connectionString, { prepare: false });
@@ -59,4 +60,28 @@ export async function deletePlexPin(code: string): Promise<void> {
 
 export async function deleteExpiredPlexPins(): Promise<void> {
   await db.delete(plexPins).where(lt(plexPins.expiresAt, new Date()));
+}
+
+export async function getUserByWebhookToken(token: string): Promise<User | null> {
+  const [user] = await db.select().from(users).where(eq(users.webhookToken, token));
+  return user || null;
+}
+
+export async function generateWebhookToken(): Promise<string> {
+  return randomBytes(32).toString('hex');
+}
+
+export async function ensureUserHasWebhookToken(userId: string): Promise<string> {
+  const user = await getUserById(userId);
+  if (!user) {
+    throw new Error('User not found');
+  }
+  
+  if (user.webhookToken) {
+    return user.webhookToken;
+  }
+  
+  const token = await generateWebhookToken();
+  await updateUser(userId, { webhookToken: token });
+  return token;
 }

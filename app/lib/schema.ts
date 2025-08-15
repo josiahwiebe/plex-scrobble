@@ -8,6 +8,7 @@ export const users = pgTable("users", {
   letterboxdUsername: text("letterboxd_username"),
   letterboxdPasswordHash: text("letterboxd_password_hash"),
   letterboxdPasswordSalt: text("letterboxd_password_salt"),
+  webhookToken: text("webhook_token").unique(),
   webhookSettings: jsonb("webhook_settings").$type<WebhookSettings>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

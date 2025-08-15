@@ -48,6 +48,7 @@ export async function getPlexAuthUrl(request: Request): Promise<{ authUrl: strin
     'context[device][product]': 'Plex Scrobbler',
     'context[device][platform]': 'web',
     'context[device][device]': 'Plex Scrobbler',
+    'context[device][version]': '1.0.0',
   });
 
   const authUrl = `https://app.plex.tv/auth#?${authUrlParams.toString()}`;

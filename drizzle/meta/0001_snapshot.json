@@ -1,0 +1,169 @@
+{
+  "id": "78044565-15f3-4c49-a2de-12e0108dac31",
+  "prevId": "8b149c61-3859-4594-b892-13fad7d12334",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.plex_pins": {
+      "name": "plex_pins",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "pin_id": {
+          "name": "pin_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "plex_pins_code_unique": {
+          "name": "plex_pins_code_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "plex_id": {
+          "name": "plex_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plex_username": {
+          "name": "plex_username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plex_token": {
+          "name": "plex_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "letterboxd_username": {
+          "name": "letterboxd_username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "letterboxd_password_hash": {
+          "name": "letterboxd_password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "letterboxd_password_salt": {
+          "name": "letterboxd_password_salt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_token": {
+          "name": "webhook_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_settings": {
+          "name": "webhook_settings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_plex_id_unique": {
+          "name": "users_plex_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "plex_id"
+          ]
+        },
+        "users_webhook_token_unique": {
+          "name": "users_webhook_token_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "webhook_token"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

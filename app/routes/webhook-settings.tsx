@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, redirect, Link } from "react-router";
 import { validateUserSession } from "../lib/plex-session.js";
-import { updateUser } from "../lib/database.js";
+import { updateUser, ensureUserHasWebhookToken } from "../lib/database.js";
 import type { WebhookSettings } from "../lib/schema.js";
 
 export function meta() {
@@ -34,8 +34,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
 
   const webhookSettings = user.webhookSettings || defaultSettings;
+  
+  const webhookToken = await ensureUserHasWebhookToken(user.id);
 
-  return { user, webhookSettings, success, error };
+  return { user, webhookSettings, webhookToken, success, error };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -75,11 +77,12 @@ export default function WebhookSettings({ loaderData }: {
   loaderData: {
     user: any;
     webhookSettings: WebhookSettings;
+    webhookToken: string;
     success: string | null;
     error: string | null;
   }
 }) {
-  const { webhookSettings, success, error } = loaderData;
+  const { webhookSettings, webhookToken, success, error } = loaderData;
 
   return (
     <div className="app-container">
@@ -114,7 +117,7 @@ export default function WebhookSettings({ loaderData }: {
         <div className="retro-card bg-gradient-to-br from-blue-50 to-blue-100 p-6">
           <h3 className="font-bold mb-3 text-lg gradient-text text-center">🔗 YOUR WEBHOOK URL</h3>
           <div className="retro-input p-4 bg-gray-100 font-mono text-sm text-center break-all">
-            {new URL('/webhook', 'https://plex-scrobble.jwie.be').toString()}
+            {new URL(`/webhook/${webhookToken}`, 'https://plex-scrobble.jwie.be').toString()}
           </div>
           <p className="text-sm text-gray-600 mt-3 text-center">
             Add this URL to your Plex server's webhook settings
