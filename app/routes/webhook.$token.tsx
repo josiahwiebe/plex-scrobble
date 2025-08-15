@@ -72,6 +72,11 @@ export async function action({ request, params }: ActionFunctionArgs) {
       eventData = await request.json().then(data => data as PlexWebhookEvent);
     }
 
+    if (eventData.event === 'webhook.created') {
+      await telegram?.sendWebhookSuccess('webhook.created');
+      return Response.json({ message: 'Webhook created' }, { status: 200 });
+    }
+
     if (!eventData || (eventData.event !== 'media.scrobble' && eventData.event !== 'media.rate')) {
       console.error('Invalid webhook data, event type:', eventData.event);
       return Response.json({ message: 'Invalid webhook data', event: eventData?.event }, { status: 200 });
