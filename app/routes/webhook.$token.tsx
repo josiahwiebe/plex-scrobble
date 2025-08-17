@@ -90,6 +90,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
       return Response.json({ message: 'Invalid webhook token' }, { status: 401 });
     }
 
+    if (user.plexUsername !== eventData.Account.title) {
+      console.log('🐛 [DEBUG] Scrobbling not enabled for this user');
+      console.log('🐛 [DEBUG] Webhook User:', user.plexUsername);
+      console.log('🐛 [DEBUG] Event Data Username:', eventData.Account.title);
+      return Response.json({ message: 'Scrobbling not enabled for this user' }, { status: 200 });
+    }
+
     if (!user.letterboxdUsername || !user.letterboxdPasswordHash) {
       return Response.json({ message: 'Letterboxd credentials not configured' }, { status: 200 });
     }
