@@ -191,19 +191,45 @@ export class LetterboxdScraper {
         waitUntil: 'networkidle2'
       });
 
+      // Wait for either the new React components or old film-poster elements
       await Promise.race([
+        this.page.waitForSelector('.react-component.figure[data-item-slug]', { timeout: 3000 }),
         this.page.waitForSelector('.film-poster', { timeout: 3000 }),
         this.page.waitForSelector('.no-results', { timeout: 3000 })
-      ])
+      ]).catch(() => {
+        // Continue if timeout - we'll check what's actually on the page
+      });
 
       const film = await this.page.evaluate(() => {
-        const filmElement = document.querySelector('.film-poster');
+        // Look for the React component element that contains the film data
+        const filmElement = document.querySelector('.react-component.figure[data-item-slug]') ||
+                           document.querySelector('.film-poster');
+
         if (!filmElement) return null;
 
-        const filmUrl = filmElement.getAttribute('data-film-link');
-        const filmTitle = filmElement.getAttribute('data-film-name');
+        // Extract data using the correct attribute names from the HTML structure
+        const filmUrl = filmElement.getAttribute('data-item-link') ||
+                       filmElement.getAttribute('data-film-link');
 
-        let uid = filmElement.getAttribute('data-item-uid');
+        const filmTitle = filmElement.getAttribute('data-item-name') ||
+                         filmElement.getAttribute('data-film-name');
+
+        // Extract UID from the postered-identifier JSON
+        let uid = null;
+        const posteredIdentifier = filmElement.getAttribute('data-postered-identifier');
+        if (posteredIdentifier) {
+          try {
+            const parsed = JSON.parse(posteredIdentifier);
+            uid = parsed.uid;
+          } catch (e) {
+            // Fall back to other methods if JSON parsing fails
+          }
+        }
+
+        // Fallback UID methods
+        if (!uid) {
+          uid = filmElement.getAttribute('data-item-uid');
+        }
         if (!uid) {
           const filmId = filmElement.getAttribute('data-film-id');
           if (filmId) {
@@ -257,18 +283,46 @@ export class LetterboxdScraper {
         waitUntil: 'networkidle2'
       });
 
-      await this.page!.waitForSelector('.film-poster', { timeout: 5000 });
+      // Wait for either the new React components or old film-poster elements
+      await Promise.race([
+        this.page!.waitForSelector('.react-component.figure[data-item-slug]', { timeout: 5000 }),
+        this.page!.waitForSelector('.film-poster', { timeout: 5000 })
+      ]).catch(() => {
+        // Continue if timeout - we'll check what's actually on the page
+      });
 
       const films = await this.page!.evaluate(() => {
-        const filmElements = document.querySelectorAll('.film-poster');
+        // Look for React component elements or fallback to film-poster
+        let filmElements = document.querySelectorAll('.react-component.figure[data-item-slug]');
+        if (filmElements.length === 0) {
+          filmElements = document.querySelectorAll('.film-poster');
+        }
         const results: Array<{ title: string; url: string; slug: string; uid: string }> = [];
 
         for (const element of filmElements) {
-          const filmUrl = element.getAttribute('data-film-link');
-          const filmTitle = element.getAttribute('data-film-name');
+          // Extract data using the correct attribute names
+          const filmUrl = element.getAttribute('data-item-link') ||
+                         element.getAttribute('data-film-link');
 
-          // Get UID from data attributes
-          let uid = element.getAttribute('data-item-uid');
+          const filmTitle = element.getAttribute('data-item-name') ||
+                           element.getAttribute('data-film-name');
+
+          // Extract UID from the postered-identifier JSON
+          let uid = null;
+          const posteredIdentifier = element.getAttribute('data-postered-identifier');
+          if (posteredIdentifier) {
+            try {
+              const parsed = JSON.parse(posteredIdentifier);
+              uid = parsed.uid;
+            } catch (e) {
+              // Fall back to other methods if JSON parsing fails
+            }
+          }
+
+          // Fallback UID methods
+          if (!uid) {
+            uid = element.getAttribute('data-item-uid');
+          }
           if (!uid) {
             const filmId = element.getAttribute('data-film-id');
             if (filmId) {
