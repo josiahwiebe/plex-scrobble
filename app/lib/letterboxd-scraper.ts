@@ -454,7 +454,7 @@ export class LetterboxdScraper {
       // Skip if movies-only filter is enabled and this isn't a movie
       if (webhookSettings.onlyMovies && metadata.librarySectionType !== 'movie') {
         console.log('Movies-only filter enabled, skipping non-movie');
-        return true;
+        return false;
       }
 
       // Check if this event type is enabled
@@ -471,7 +471,7 @@ export class LetterboxdScraper {
 
     if (metadata.librarySectionType !== 'movie') {
       console.log('Not a movie, skipping');
-      return true;
+      return false;
     }
 
     const title = metadata.title;
