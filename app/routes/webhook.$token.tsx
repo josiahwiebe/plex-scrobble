@@ -158,27 +158,34 @@ async function handleMarkAsWatched(
     console.log('Processing media.scrobble event...');
 
     const scraper = await createLetterboxdSession(username, password);
-    const success = await scraper.logFilmFromPlex(eventData, settings);
+    const result = await scraper.logFilmFromPlex(eventData, settings);
     await scraper.close();
 
-    if (success) {
+    if (result.success) {
       if (telegram) {
         await telegram.sendWebhookSuccess('media.scrobble', eventData.Metadata?.title);
       }
 
       return Response.json({
-        message: 'Successfully logged to Letterboxd',
+        message: result.message || 'Successfully logged to Letterboxd',
         film: eventData.Metadata?.title
       }, { status: 200 });
     } else {
-      if (telegram) {
-        await telegram.sendWebhookFailure('media.scrobble', eventData.Metadata?.title, 'Failed to log to Letterboxd');
+      // Only send error notifications for actual errors, not filtering
+      const isActualError = result.reason && ['login_failed', 'mark_failed', 'unknown_error', 'film_not_found'].includes(result.reason);
+
+      if (telegram && isActualError) {
+        await telegram.sendWebhookFailure('media.scrobble', eventData.Metadata?.title, result.message);
       }
 
+      // For non-errors (filtering), return 200 status; for actual errors, return 400
+      const statusCode = isActualError ? 400 : 200;
+
       return Response.json({
-        message: 'Failed to log to Letterboxd',
-        film: eventData.Metadata?.title
-      }, { status: 400 });
+        message: result.message || 'Failed to log to Letterboxd',
+        film: eventData.Metadata?.title,
+        reason: result.reason
+      }, { status: statusCode });
     }
   } catch (error) {
     console.error('Error in handleMarkAsWatched:', error);
@@ -202,28 +209,35 @@ async function handleRate(
     console.log('Processing media.rate event...');
 
     const scraper = await createLetterboxdSession(username, password);
-    const success = await scraper.logFilmFromPlex(eventData, settings);
+    const result = await scraper.logFilmFromPlex(eventData, settings);
     await scraper.close();
 
-    if (success) {
+    if (result.success) {
       if (telegram) {
         await telegram.sendWebhookSuccess('media.rate', eventData.Metadata?.title, eventData.rating);
       }
 
       return Response.json({
-        message: 'Successfully updated rating on Letterboxd',
+        message: result.message || 'Successfully updated rating on Letterboxd',
         film: eventData.Metadata?.title,
         rating: eventData.rating
       }, { status: 200 });
     } else {
-      if (telegram) {
-        await telegram.sendWebhookFailure('media.rate', eventData.Metadata?.title, 'Failed to update rating on Letterboxd');
+      // Only send error notifications for actual errors, not filtering
+      const isActualError = result.reason && ['login_failed', 'mark_failed', 'unknown_error', 'film_not_found'].includes(result.reason);
+
+      if (telegram && isActualError) {
+        await telegram.sendWebhookFailure('media.rate', eventData.Metadata?.title, result.message);
       }
 
+      // For non-errors (filtering), return 200 status; for actual errors, return 400
+      const statusCode = isActualError ? 400 : 200;
+
       return Response.json({
-        message: 'Failed to update rating on Letterboxd',
-        film: eventData.Metadata?.title
-      }, { status: 400 });
+        message: result.message || 'Failed to update rating on Letterboxd',
+        film: eventData.Metadata?.title,
+        reason: result.reason
+      }, { status: statusCode });
     }
   } catch (error) {
     console.error('Error in handleRate:', error);

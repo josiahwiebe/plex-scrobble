@@ -124,3 +124,10 @@ export interface LetterboxdWatchOptions {
   review?: string;
   tags?: string;
 }
+
+export interface ScrobbleResult {
+  success: boolean;
+  reason?: 'webhooks_disabled' | 'non_movie' | 'event_disabled' | 'film_not_found' | 'login_failed' | 'mark_failed' | 'unknown_error';
+  message?: string;
+  error?: Error;
+}

@@ -1,5 +1,5 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
-import { PlexWebhookEvent, LetterboxdFilm, LetterboxdWatchOptions } from '../../types.js';
+import { PlexWebhookEvent, LetterboxdFilm, LetterboxdWatchOptions, ScrobbleResult } from '../../types.js';
 import { WebhookSettings } from './schema.js';
 
 interface Cookie {
@@ -440,7 +440,7 @@ export class LetterboxdScraper {
     }
   }
 
-  async logFilmFromPlex(plexEvent: PlexWebhookEvent, webhookSettings?: WebhookSettings): Promise<boolean> {
+  async logFilmFromPlex(plexEvent: PlexWebhookEvent, webhookSettings?: WebhookSettings): Promise<ScrobbleResult> {
     const metadata = plexEvent.Metadata;
 
     // Check webhook settings
@@ -448,30 +448,50 @@ export class LetterboxdScraper {
       // Skip if webhooks are disabled
       if (!webhookSettings.enabled) {
         console.log('Webhooks disabled, skipping');
-        return false;
+        return {
+          success: false,
+          reason: 'webhooks_disabled',
+          message: 'Webhooks are disabled in settings'
+        };
       }
 
       // Skip if movies-only filter is enabled and this isn't a movie
       if (webhookSettings.onlyMovies && metadata.librarySectionType !== 'movie') {
         console.log('Movies-only filter enabled, skipping non-movie');
-        return false;
+        return {
+          success: false,
+          reason: 'non_movie',
+          message: 'Movies-only filter enabled, skipping non-movie content'
+        };
       }
 
       // Check if this event type is enabled
       if (plexEvent.event === 'media.scrobble' && !webhookSettings.events.scrobble) {
         console.log('Scrobble events disabled, skipping');
-        return false;
+        return {
+          success: false,
+          reason: 'event_disabled',
+          message: 'Scrobble events are disabled in settings'
+        };
       }
 
       if (plexEvent.event === 'media.rate' && !webhookSettings.events.rate) {
         console.log('Rate events disabled, skipping');
-        return false;
+        return {
+          success: false,
+          reason: 'event_disabled',
+          message: 'Rate events are disabled in settings'
+        };
       }
     }
 
     if (metadata.librarySectionType !== 'movie') {
       console.log('Not a movie, skipping');
-      return false;
+      return {
+        success: false,
+        reason: 'non_movie',
+        message: 'Content is not a movie, skipping'
+      };
     }
 
     const title = metadata.title;
@@ -481,40 +501,71 @@ export class LetterboxdScraper {
 
     console.log(`Processing film: ${title} (${year})`);
 
-    if (!this.isLoggedIn) {
-      await this.loadCookies();
+    try {
       if (!this.isLoggedIn) {
-        throw new Error('Not logged in to Letterboxd. Please log in first.');
+        await this.loadCookies();
+        if (!this.isLoggedIn) {
+          return {
+            success: false,
+            reason: 'login_failed',
+            message: 'Not logged in to Letterboxd. Please log in first.',
+            error: new Error('Login failed')
+          };
+        }
       }
+
+      // Extract external IDs for better matching
+      const externalIds = this.extractExternalIds(plexEvent);
+
+      const film = await this.searchFilm(title, year, director, externalIds);
+      if (!film) {
+        console.log(`Could not find film: ${title} (${year})`);
+        return {
+          success: false,
+          reason: 'film_not_found',
+          message: `Could not find film: ${title} (${year}) on Letterboxd`,
+          error: new Error(`Film not found: ${title}`)
+        };
+      }
+
+      // Use the actual timestamp from Plex when the movie was watched
+      let watchedDate: string;
+      if (metadata.lastViewedAt) {
+        const watchedDateTime = new Date(metadata.lastViewedAt * 1000); // Convert Unix timestamp to Date
+        watchedDate = `${watchedDateTime.getFullYear()}-${String(watchedDateTime.getMonth() + 1).padStart(2, '0')}-${String(watchedDateTime.getDate()).padStart(2, '0')}`;
+      } else {
+        // Fallback to current date if no lastViewedAt is available
+        const now = new Date();
+        watchedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      }
+
+      const success = await this.markAsWatched(film, {
+        watchedDate,
+        rating: userRating,
+        tags: 'plex'
+      });
+
+      if (success) {
+        return {
+          success: true,
+          message: `Successfully logged ${title} to Letterboxd`
+        };
+      } else {
+        return {
+          success: false,
+          reason: 'mark_failed',
+          message: `Failed to mark ${title} as watched on Letterboxd`,
+          error: new Error('Mark as watched failed')
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        reason: 'unknown_error',
+        message: `Unexpected error processing ${title}`,
+        error: error as Error
+      };
     }
-
-    // Extract external IDs for better matching
-    const externalIds = this.extractExternalIds(plexEvent);
-
-    const film = await this.searchFilm(title, year, director, externalIds);
-    if (!film) {
-      console.log(`Could not find film: ${title} (${year})`);
-      return false;
-    }
-
-    // Use the actual timestamp from Plex when the movie was watched
-    let watchedDate: string;
-    if (metadata.lastViewedAt) {
-      const watchedDateTime = new Date(metadata.lastViewedAt * 1000); // Convert Unix timestamp to Date
-      watchedDate = `${watchedDateTime.getFullYear()}-${String(watchedDateTime.getMonth() + 1).padStart(2, '0')}-${String(watchedDateTime.getDate()).padStart(2, '0')}`;
-    } else {
-      // Fallback to current date if no lastViewedAt is available
-      const now = new Date();
-      watchedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    }
-
-    const success = await this.markAsWatched(film, {
-      watchedDate,
-      rating: userRating,
-      tags: 'plex'
-    });
-
-    return success;
   }
 
   async close(): Promise<void> {
