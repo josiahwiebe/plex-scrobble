@@ -1,6 +1,16 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
 import { PlexWebhookEvent, LetterboxdFilm, LetterboxdWatchOptions, ScrobbleResult } from '../../types.js';
 import { WebhookSettings } from './schema.js';
+
+// Use loose types to handle both puppeteer and puppeteer-core variants
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BrowserInstance = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PageInstance = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ElementHandleInstance = any;
+
+/** Modern Chrome user-agent - update periodically */
+const CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 interface Cookie {
   name: string;
@@ -13,46 +23,80 @@ interface Cookie {
   sameSite?: 'Strict' | 'Lax' | 'None';
 }
 
+/**
+ * Letterboxd scraper with stealth mode and bot detection evasion.
+ * Uses puppeteer-extra with stealth plugin to avoid Cloudflare blocks.
+ */
 export class LetterboxdScraper {
-  private browser: Browser | null = null;
-  private page: Page | null = null;
+  private browser: BrowserInstance | null = null;
+  private page: PageInstance | null = null;
   private isLoggedIn: boolean = false;
   private cookies: Cookie[] = [];
   private csrfToken: string | null = null;
 
+  /**
+   * Initialize browser with stealth mode enabled.
+   * Uses puppeteer-extra on local dev and puppeteer-core with chromium on Vercel.
+   */
   async init(): Promise<void> {
     const isVercel = !!process.env.VERCEL_ENV;
-    let puppeteer
+
     let launchOptions: any = {
       headless: true,
       args: [
         '--no-sandbox',
-        '--disable-setuid-sandbox'
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-infobars',
+        '--window-size=1920,1080',
       ]
     };
 
-    if (isVercel) {
-      const chromium = (await import("@sparticuz/chromium")).default;
-      puppeteer = await import("puppeteer-core");
-      launchOptions = {
-        ...launchOptions,
-        args: [...launchOptions.args, ...chromium.args],
-        executablePath: await chromium.executablePath(),
-        headless: true,
-      };
-    } else {
-      puppeteer = await import("puppeteer");
-    }
-
     try {
-      this.browser = await puppeteer.launch(launchOptions) as Browser;
+      if (isVercel) {
+        // On Vercel, use puppeteer-core with @sparticuz/chromium
+        // Note: stealth plugin doesn't work with puppeteer-core, but we add extra evasions
+        const chromium = (await import("@sparticuz/chromium")).default;
+        const puppeteerCore = await import("puppeteer-core");
+
+        launchOptions = {
+          ...launchOptions,
+          args: [...launchOptions.args, ...chromium.args],
+          executablePath: await chromium.executablePath(),
+          headless: true,
+        };
+
+        this.browser = await puppeteerCore.launch(launchOptions);
+      } else {
+        // On local dev, use puppeteer-extra with stealth plugin
+        const puppeteerExtra = (await import("puppeteer-extra")).default;
+        const StealthPlugin = (await import("puppeteer-extra-plugin-stealth")).default;
+
+        puppeteerExtra.use(StealthPlugin());
+        this.browser = await puppeteerExtra.launch(launchOptions);
+      }
+
       this.page = await this.browser.newPage();
 
-      await this.page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-      await this.page.setViewport({ width: 1280, height: 720 });
-
+      // Set modern user-agent
+      await this.page.setUserAgent(CHROME_USER_AGENT);
+      await this.page.setViewport({ width: 1920, height: 1080 });
       this.page.setDefaultTimeout(30000);
+
+      // Additional evasion: override navigator.webdriver
+      await this.page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined,
+        });
+        // Mock plugins
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => [1, 2, 3, 4, 5],
+        });
+        // Mock languages
+        Object.defineProperty(navigator, 'languages', {
+          get: () => ['en-US', 'en'],
+        });
+      });
 
     } catch (error) {
       console.error('Failed to initialize Puppeteer:', error);
@@ -60,29 +104,104 @@ export class LetterboxdScraper {
     }
   }
 
+  /**
+   * Wait for Cloudflare challenge to complete.
+   * Polls page title/content for challenge indicators.
+   */
+  private async waitForCloudflare(maxWaitMs = 30000): Promise<void> {
+    if (!this.page) return;
+
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      try {
+        const title = await this.page.title();
+        const content = await this.page.content();
+
+        // Cloudflare challenge indicators
+        const isCloudflareChallenge =
+          title?.includes('Just a moment') ||
+          title?.includes('Attention Required') ||
+          content?.includes('cf-browser-verification') ||
+          content?.includes('challenge-platform') ||
+          content?.includes('cf-turnstile');
+
+        if (!isCloudflareChallenge) {
+          return; // Challenge cleared or not present
+        }
+
+        console.log('Waiting for Cloudflare challenge to complete...');
+        await this.randomDelay(2000, 3000);
+      } catch (error) {
+        // Page might be navigating, wait and retry
+        await this.randomDelay(1000, 2000);
+      }
+    }
+
+    console.warn('Cloudflare challenge did not clear within timeout');
+  }
+
+  /**
+   * Add a random delay to mimic human behavior.
+   */
+  private async randomDelay(minMs = 500, maxMs = 1500): Promise<void> {
+    const delay = minMs + Math.random() * (maxMs - minMs);
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+
+  /**
+   * Type text with human-like delays between keystrokes.
+   */
+  private async humanType(element: ElementHandleInstance, text: string): Promise<void> {
+    for (const char of text) {
+      await element.type(char, { delay: 50 + Math.random() * 100 });
+      // Occasional longer pause (simulates thinking)
+      if (Math.random() < 0.1) {
+        await this.randomDelay(100, 300);
+      }
+    }
+  }
+
+  /**
+   * Login to Letterboxd with a single attempt.
+   * Use loginWithRetry() for production use.
+   */
   async login(username: string, password: string): Promise<boolean> {
     if (!this.page) await this.init();
 
     try {
+      console.log('Navigating to Letterboxd sign-in page...');
       await this.page!.goto('https://letterboxd.com/sign-in/', {
         waitUntil: 'networkidle2',
         timeout: 30000
       });
 
-      let usernameField = null;
+      // Wait for any Cloudflare challenge to clear
+      await this.waitForCloudflare();
+
+      // Random delay before interacting (human behavior)
+      await this.randomDelay(1000, 2000);
+
+      // Find username field
+      let usernameField: ElementHandleInstance | null = null;
       const usernameSelectors = ['input[name="username"]', 'input[name="email"]', 'input[type="text"]', 'input[type="email"]'];
 
       for (const selector of usernameSelectors) {
         usernameField = await this.page!.$(selector);
         if (usernameField) {
+          console.log(`Found username field with selector: ${selector}`);
           break;
         }
       }
 
       if (!usernameField) {
-        throw new Error('Username field not found');
+        const pageTitle = await this.page!.title();
+        const pageUrl = this.page!.url();
+        console.error(`Username field not found. Page title: "${pageTitle}", URL: ${pageUrl}`);
+        throw new Error('Username field not found - page structure may have changed');
       }
 
+      // Find password field
       let passwordField = await this.page!.$('input[name="password"]');
       if (!passwordField) {
         passwordField = await this.page!.$('input[type="password"]');
@@ -92,9 +211,14 @@ export class LetterboxdScraper {
         throw new Error('Password field not found');
       }
 
-      await usernameField.type(username, { delay: 50 });
-      await passwordField.type(password, { delay: 50 });
+      // Type credentials with human-like delays
+      console.log('Entering credentials...');
+      await this.humanType(usernameField, username);
+      await this.randomDelay(300, 700);
+      await this.humanType(passwordField, password);
+      await this.randomDelay(500, 1000);
 
+      // Find and click submit button
       const submitButton = await this.page!.$('input[type="submit"], button[type="submit"]');
       if (!submitButton) {
         throw new Error('Submit button not found');
@@ -103,7 +227,7 @@ export class LetterboxdScraper {
       const navigationPromise = this.page!.waitForNavigation({
         waitUntil: 'networkidle2',
         timeout: 30000
-      }).catch(err => {
+      }).catch((err: Error) => {
         console.log('Navigation wait failed:', err.message);
         return null;
       });
@@ -111,22 +235,105 @@ export class LetterboxdScraper {
       await submitButton.click();
       await navigationPromise;
 
-      const currentUrl = this.page!.url();
-      this.isLoggedIn = !currentUrl.includes('/sign-in/');
+      // Wait for any post-login Cloudflare challenge
+      await this.waitForCloudflare();
+
+      // Verify login succeeded
+      this.isLoggedIn = await this.verifyLoggedIn();
 
       if (this.isLoggedIn) {
         console.log('Successfully logged in to Letterboxd');
         await this.saveCookies();
       } else {
+        // Capture diagnostic info
+        const pageTitle = await this.page!.title();
+        const currentUrl = this.page!.url();
         const errorMessage = await this.page!.$eval('.error, .form-error, .message',
-          el => el.textContent).catch(() => 'No specific error found');
-        throw new Error(`Login failed - still on sign-in page. Error: ${errorMessage}`);
+          (el: Element) => el.textContent).catch(() => 'No specific error message found');
+
+        console.error(`Login failed. Title: "${pageTitle}", URL: ${currentUrl}, Error: ${errorMessage}`);
+        throw new Error(`Login failed - ${errorMessage}`);
       }
 
       return this.isLoggedIn;
     } catch (error) {
       console.error('Login error:', error);
 
+      // Log additional diagnostics
+      if (this.page) {
+        try {
+          const pageTitle = await this.page.title();
+          const pageUrl = this.page.url();
+          console.error(`Diagnostic - Page title: "${pageTitle}", URL: ${pageUrl}`);
+        } catch (e) {
+          // Ignore diagnostic errors
+        }
+      }
+
+      return false;
+    }
+  }
+
+  /**
+   * Login with retry logic and exponential backoff.
+   * Recommended for production use.
+   */
+  async loginWithRetry(username: string, password: string, maxAttempts = 3): Promise<boolean> {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      console.log(`Login attempt ${attempt}/${maxAttempts}...`);
+
+      try {
+        const success = await this.login(username, password);
+        if (success) {
+          return true;
+        }
+      } catch (error) {
+        console.error(`Login attempt ${attempt} failed:`, error);
+      }
+
+      if (attempt < maxAttempts) {
+        // Exponential backoff: 2s, 4s, 8s...
+        const delayMs = Math.pow(2, attempt) * 1000;
+        console.log(`Waiting ${delayMs}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+
+        // Reinitialize browser for fresh state
+        await this.close();
+        await this.init();
+      }
+    }
+
+    console.error(`All ${maxAttempts} login attempts failed`);
+    return false;
+  }
+
+  /**
+   * Verify that the user is actually logged in by checking session state.
+   */
+  private async verifyLoggedIn(): Promise<boolean> {
+    if (!this.page) return false;
+
+    try {
+      const currentUrl = this.page.url();
+
+      // If still on sign-in page, definitely not logged in
+      if (currentUrl.includes('/sign-in')) {
+        return false;
+      }
+
+      // Check for logged-in indicators in the page
+      const hasLoggedInElements = await this.page.evaluate(() => {
+        // Look for elements that only appear when logged in
+        const avatar = document.querySelector('.avatar, .nav-avatar, [data-person]');
+        const signOutLink = document.querySelector('a[href*="sign-out"]');
+        const activityLink = document.querySelector('a[href*="/activity"]');
+
+        return !!(avatar || signOutLink || activityLink);
+      });
+
+      return hasLoggedInElements;
+    } catch (error) {
+      console.error('Error verifying login status:', error);
       return false;
     }
   }
@@ -137,7 +344,7 @@ export class LetterboxdScraper {
     const cookies = await this.page.cookies();
     this.cookies = cookies;
 
-    const csrfCookie = cookies.find(cookie => cookie.name === 'com.xk72.webparts.csrf');
+    const csrfCookie = cookies.find((cookie: Cookie) => cookie.name === 'com.xk72.webparts.csrf');
     if (csrfCookie) {
       this.csrfToken = csrfCookie.value;
     }
@@ -167,6 +374,7 @@ export class LetterboxdScraper {
       .map(cookie => `${cookie.name}=${cookie.value}`)
       .join('; ');
   }
+
   private extractExternalIds(plexEvent: PlexWebhookEvent): { imdb?: string; tmdb?: string } {
     const guids = plexEvent.Metadata.Guid || [];
     const ids: { imdb?: string; tmdb?: string } = {};
@@ -191,11 +399,14 @@ export class LetterboxdScraper {
         waitUntil: 'networkidle2'
       });
 
+      // Wait for Cloudflare if present
+      await this.waitForCloudflare();
+
       // Wait for either the new React components or old film-poster elements
       await Promise.race([
-        this.page.waitForSelector('.react-component.figure[data-item-slug]', { timeout: 3000 }),
-        this.page.waitForSelector('.film-poster', { timeout: 3000 }),
-        this.page.waitForSelector('.no-results', { timeout: 3000 })
+        this.page.waitForSelector('.react-component.figure[data-item-slug]', { timeout: 5000 }),
+        this.page.waitForSelector('.film-poster', { timeout: 5000 }),
+        this.page.waitForSelector('.no-results', { timeout: 5000 })
       ]).catch(() => {
         // Continue if timeout - we'll check what's actually on the page
       });
@@ -282,6 +493,9 @@ export class LetterboxdScraper {
       await this.page!.goto(`https://letterboxd.com/search/films/${searchQuery}/`, {
         waitUntil: 'networkidle2'
       });
+
+      // Wait for Cloudflare if present
+      await this.waitForCloudflare();
 
       // Wait for either the new React components or old film-poster elements
       await Promise.race([
@@ -418,7 +632,7 @@ export class LetterboxdScraper {
           'dnt': '1',
           'origin': 'https://letterboxd.com',
           'referer': film.url,
-          'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'user-agent': CHROME_USER_AGENT,
           'x-requested-with': 'XMLHttpRequest'
         },
         body: formData.toString()
@@ -589,18 +803,28 @@ export class LetterboxdScraper {
         }
       }
     }
+    this.isLoggedIn = false;
   }
 }
 
+/**
+ * Create a Letterboxd session with login retry logic.
+ * @param username - Letterboxd username
+ * @param password - Letterboxd password
+ * @returns Authenticated LetterboxdScraper instance
+ * @throws Error if all login attempts fail
+ */
 export async function createLetterboxdSession(username: string, password: string): Promise<LetterboxdScraper> {
   const scraper = new LetterboxdScraper();
   await scraper.init();
 
   const cookiesLoaded = await scraper.loadCookies();
   if (!cookiesLoaded) {
-    const loginSuccess = await scraper.login(username, password);
+    // Use retry logic for login
+    const loginSuccess = await scraper.loginWithRetry(username, password, 3);
     if (!loginSuccess) {
-      throw new Error('Failed to login to Letterboxd');
+      await scraper.close();
+      throw new Error('Failed to login to Letterboxd after multiple attempts');
     }
   }
 
