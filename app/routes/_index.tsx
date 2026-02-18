@@ -90,12 +90,20 @@ export default function Home({ loaderData }: { loaderData: { user: any; success:
                   <p className="text-2xl font-bold mb-2">🎉 ALL CONNECTED</p>
                   <p className="text-lg">Your Plex watches will now sync to Letterboxd</p>
                 </div>
-                <Link
-                  to="/webhook-settings"
-                  className="retro-button block w-full bg-gradient-to-r from-blue-400 to-blue-500 hover:from-blue-300 hover:to-blue-400 p-4 text-lg text-black text-center no-underline"
-                >
-                  ⚙️ CONFIGURE WEBHOOK SETTINGS
-                </Link>
+                <div className="button-grid">
+                  <Link
+                    to="/webhook-settings"
+                    className="retro-button block w-full bg-gradient-to-r from-blue-400 to-blue-500 hover:from-blue-300 hover:to-blue-400 p-4 text-lg text-black text-center no-underline"
+                  >
+                    ⚙️ WEBHOOK SETTINGS
+                  </Link>
+                  <Link
+                    to="/letterboxd"
+                    className="retro-button block w-full bg-gradient-to-r from-emerald-400 to-emerald-500 hover:from-emerald-300 hover:to-emerald-400 p-4 text-lg text-black text-center no-underline"
+                  >
+                    📽️ UPDATE LETTERBOXD
+                  </Link>
+                </div>
               </div>
             )}
           </div>
