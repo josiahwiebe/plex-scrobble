@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["DOM", "DOM.Iterable", "ES6"],
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "allowJs": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -19,13 +19,8 @@
     "paths": {
       "~/*": ["./app/*"]
     },
-    "types": ["node", "@vercel/react-router", "vite/client"]
+    "types": ["node", "vite/client"]
   },
-  "include": [
-    "app/**/*",
-    "src/**/*",
-    "react-router.config.ts",
-    "vite.config.ts"
-, "types.ts"  ],
+  "include": ["app/**/*", "react-router.config.ts", "vite.config.ts", "types.ts"],
   "exclude": ["node_modules"]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "letterboxd_session_cookies" jsonb;
