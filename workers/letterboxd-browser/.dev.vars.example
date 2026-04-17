@@ -1,0 +1,2 @@
+# Local wrangler dev — mirror the secret you set on Vercel.
+LETTERBOXD_BROWSER_RENDERING_SECRET=""
