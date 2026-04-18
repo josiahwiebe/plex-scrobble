@@ -179,7 +179,8 @@ export class LetterboxdScraper {
   }
 
   private async validateSession(username: string): Promise<boolean> {
-    const res = await this.rawFetch(`https://letterboxd.com/${encodeURIComponent(username)}/`, {
+    const profileSlug = username.trim().toLowerCase()
+    const res = await this.rawFetch(`https://letterboxd.com/${encodeURIComponent(profileSlug)}/`, {
       redirect: 'follow',
     })
     mergeResponseCookies(res, this.jar)
@@ -258,7 +259,7 @@ export class LetterboxdScraper {
     const remote = await letterboxdLoginViaBrowserRendering(username, password)
     if (!remote?.length) {
       console.error(
-        'Letterboxd: Cloudflare challenge and no browser session. Set LETTERBOXD_BROWSER_RENDERING_URL + SECRET (CF Worker) or retry later.'
+        'Letterboxd: browser worker did not return session cookies (check preceding "Letterboxd browser rendering" log — wrong password, profile check, CF challenge, or worker error).'
       )
       return false
     }

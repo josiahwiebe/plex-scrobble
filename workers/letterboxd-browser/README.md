@@ -13,6 +13,12 @@ The main app runs on **Vercel**. Cloudflare **Browser Rendering** only works on 
 
 Local dev: copy `.dev.vars.example` to `.dev.vars` and run `bun run dev`.
 
+## Rate limits (why you see `429`)
+
+Browser Run enforces **per-account** limits on **new browser instances**. On **Workers Free** that is roughly **one new browser every 20 seconds** and **10 minutes of browser time per day** — easy to hit if you spam “test login” or overlap with webhooks. **Workers Paid** is much looser (see [limits](https://developers.cloudflare.com/browser-rendering/platform/limits/)).
+
+This Worker **retries** `puppeteer.launch` with backoff and returns HTTP **429** with `Retry-After` when still throttled; the Vercel app **retries the HTTP call** a few times after `Retry-After`.
+
 ## Billing
 
-Browser Rendering is a paid Cloudflare capability; enable it on your account and review [Browser Rendering pricing](https://developers.cloudflare.com/browser-rendering/).
+Enable Browser Rendering on your account and review [Browser Run pricing](https://developers.cloudflare.com/browser-run/pricing/).
