@@ -58,14 +58,29 @@ function isCloudflareChallenge(html: string, status: number, headers: Headers): 
   )
 }
 
-function tryParseJson(text: string): { result?: string; message?: string } | null {
+type LoginJson = { result?: string | boolean; message?: string; csrf?: string }
+
+function tryParseJson(text: string): LoginJson | null {
   const t = text.trim()
   if (!t.startsWith('{')) return null
   try {
-    return JSON.parse(t) as { result?: string; message?: string }
+    return JSON.parse(t) as LoginJson
   } catch {
     return null
   }
+}
+
+/** Letterboxd has used both string and boolean shapes for `result` over time. */
+function isLoginJsonSuccess(json: LoginJson | null): boolean {
+  if (!json) return false
+  const r = json.result
+  return r === true || r === 'success' || r === 'Success'
+}
+
+function isLoginJsonFailure(json: LoginJson | null): boolean {
+  if (!json) return false
+  const r = json.result
+  return r === false || r === 'failure' || r === 'Failure'
 }
 
 function delay(ms: number): Promise<void> {
@@ -145,7 +160,7 @@ export class LetterboxdScraper {
 
     if (!options.forceFreshLogin && options.storedCookies?.length) {
       this.loadStoredCookies(options.storedCookies)
-      if (await this.validateSession(username)) {
+      if (await this.validateSession()) {
         this.isLoggedIn = true
         this.csrfToken = this.jar.get('com.xk72.webparts.csrf') ?? null
         return
@@ -178,16 +193,26 @@ export class LetterboxdScraper {
     return fetch(url, { ...init, headers })
   }
 
-  private async validateSession(username: string): Promise<boolean> {
-    const profileSlug = username.trim().toLowerCase()
-    const res = await this.rawFetch(`https://letterboxd.com/${encodeURIComponent(profileSlug)}/`, {
+  /**
+   * Check session without assuming stored "username" is the public profile slug
+   * (users may log in with email). /settings/ redirects to sign-in when unauthenticated.
+   */
+  private async validateSession(): Promise<boolean> {
+    const res = await this.rawFetch('https://letterboxd.com/settings/', {
       redirect: 'follow',
     })
     mergeResponseCookies(res, this.jar)
     const html = await res.text()
     if (!res.ok) return false
     if (isCloudflareChallenge(html, res.status, res.headers)) return false
-    return html.includes('sign-out') && !html.includes('name="password"')
+    const url = res.url
+    if (url.includes('/sign-in')) return false
+    const looksAuthed =
+      /sign\s*out/i.test(html) ||
+      /\/sign-out\/?/i.test(html) ||
+      /href="[^"]*sign-out/i.test(html)
+    const looksLikeLoginForm = html.includes('name="password"') && html.includes('name="username"')
+    return looksAuthed && !looksLikeLoginForm
   }
 
   private async loginWithRetry(username: string, password: string, maxAttempts: number): Promise<boolean> {
@@ -231,6 +256,9 @@ export class LetterboxdScraper {
         Origin: 'https://letterboxd.com',
         Referer: 'https://letterboxd.com/sign-in/',
         'X-Requested-With': 'XMLHttpRequest',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Dest': 'empty',
       },
       body: new URLSearchParams({
         __csrf: csrf,
@@ -247,11 +275,18 @@ export class LetterboxdScraper {
     }
 
     const json = tryParseJson(text)
-    if (json?.result === 'success') {
-      return true
+    if (isLoginJsonFailure(json)) {
+      console.error('Letterboxd login rejected:', json?.message?.trim() || text.slice(0, 500))
+      return false
+    }
+    if (isLoginJsonSuccess(json)) {
+      if (json?.csrf) {
+        this.jar.set('com.xk72.webparts.csrf', json.csrf)
+      }
+      return this.validateSession()
     }
 
-    console.error('Letterboxd login response:', text.slice(0, 500))
+    console.error('Letterboxd login unexpected response:', text.slice(0, 500))
     return false
   }
 
@@ -268,7 +303,7 @@ export class LetterboxdScraper {
       this.jar.set(c.name, c.value)
     }
     this.csrfToken = this.jar.get('com.xk72.webparts.csrf') ?? null
-    return this.validateSession(username)
+    return this.validateSession()
   }
 
   private getCookieString(): string {

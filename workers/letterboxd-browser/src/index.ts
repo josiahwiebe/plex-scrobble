@@ -64,11 +64,11 @@ async function launchBrowserWithRetries(
   throw new Error('launchBrowserWithRetries: unreachable')
 }
 
-function tryParseLoginResponse(text: string): { result?: string; message?: string } | null {
+function tryParseLoginResponse(text: string): { result?: string | boolean; message?: string } | null {
   const t = text.trim()
   if (!t.startsWith('{')) return null
   try {
-    return JSON.parse(t) as { result?: string; message?: string }
+    return JSON.parse(t) as { result?: string | boolean; message?: string }
   } catch {
     return null
   }
@@ -171,7 +171,7 @@ export default {
 
       await page.click('button[type="submit"]')
 
-      let loginJson: { result?: string; message?: string } | null = null
+      let loginJson: { result?: string | boolean; message?: string } | null = null
       try {
         const loginRes = await loginResponsePromise
         loginJson = tryParseLoginResponse(await loginRes.text())
@@ -179,7 +179,7 @@ export default {
         /* non-JSON or timeout — fall through to profile check */
       }
 
-      if (loginJson?.result === 'failure') {
+      if (loginJson?.result === 'failure' || loginJson?.result === false || loginJson?.result === 'Failure') {
         return Response.json(
           { error: loginJson.message?.trim() || 'Letterboxd rejected username or password' },
           { status: 401 }
