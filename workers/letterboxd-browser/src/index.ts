@@ -64,14 +64,22 @@ async function launchBrowserWithRetries(
   throw new Error('launchBrowserWithRetries: unreachable')
 }
 
-function tryParseLoginResponse(text: string): { result?: string | boolean; message?: string } | null {
+type LoginJson = { result?: string | boolean; message?: string }
+
+function tryParseLoginResponse(text: string): LoginJson | null {
   const t = text.trim()
   if (!t.startsWith('{')) return null
   try {
-    return JSON.parse(t) as { result?: string | boolean; message?: string }
+    return JSON.parse(t) as LoginJson
   } catch {
     return null
   }
+}
+
+function isLoginJsonFailure(json: LoginJson | null): boolean {
+  if (!json) return false
+  const r = json.result
+  return r === false || r === 'failure' || r === 'Failure'
 }
 
 function htmlLooksLikeCloudflareChallenge(html: string): boolean {
@@ -155,7 +163,6 @@ export default {
       }
 
       const user = username.trim()
-      const profileSlug = user.toLowerCase()
 
       await page.click('input[name="username"]', { clickCount: 3 })
       await page.keyboard.press('Backspace')
@@ -179,41 +186,41 @@ export default {
         /* non-JSON or timeout — fall through to profile check */
       }
 
-      if (loginJson?.result === 'failure' || loginJson?.result === false || loginJson?.result === 'Failure') {
+      if (isLoginJsonFailure(loginJson)) {
         return Response.json(
-          { error: loginJson.message?.trim() || 'Letterboxd rejected username or password' },
+          { error: loginJson!.message?.trim() || 'Letterboxd rejected username or password' },
           { status: 401 }
         )
       }
 
       // Login is usually XHR + in-place DOM update; give the client bundle time to apply cookies / UI.
-      await new Promise((r) => setTimeout(r, 4000))
+      await new Promise((r) => setTimeout(r, 2000))
 
-      await page.goto(`https://letterboxd.com/${encodeURIComponent(profileSlug)}/`, {
+      // Use /settings/ — username may be email, not public profile slug.
+      await page.goto('https://letterboxd.com/settings/', {
         waitUntil: 'domcontentloaded',
         timeout: 60000,
       })
 
-      try {
-        await page.waitForSelector('[href*="sign-out"]', { timeout: 25000 })
-      } catch {
-        /* fall through to HTML heuristic */
+      const pageUrl = page.url()
+      if (pageUrl.includes('/sign-in')) {
+        return Response.json({ error: 'Login did not complete (redirected to sign-in)' }, { status: 401 })
       }
 
       const html = await page.content()
       if (htmlLooksLikeCloudflareChallenge(html)) {
         return Response.json(
-          { error: 'Letterboxd profile page is behind a Cloudflare challenge after login' },
+          { error: 'Letterboxd settings page is behind a Cloudflare challenge after login' },
           { status: 503 }
         )
       }
 
+      const looksLikeLoginForm = html.includes('name="password"') && html.includes('name="username"')
       const signedIn =
-        /sign\s*out/i.test(html) ||
-        /\/sign-out\/?/i.test(html) ||
-        (await page.$('[href*="sign-out"]')) !== null
+        !looksLikeLoginForm &&
+        (/sign\s*out/i.test(html) || /\/sign-out\/?/i.test(html) || (await page.$('[href*="sign-out"]')) !== null)
       if (!signedIn) {
-        return Response.json({ error: 'Login did not complete (profile check failed)' }, { status: 401 })
+        return Response.json({ error: 'Login did not complete (settings check failed)' }, { status: 401 })
       }
 
       const cookieList = await page.cookies('https://letterboxd.com')

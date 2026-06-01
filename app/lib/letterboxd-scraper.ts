@@ -83,6 +83,20 @@ function isLoginJsonFailure(json: LoginJson | null): boolean {
   return r === false || r === 'failure' || r === 'Failure'
 }
 
+type DiaryJson = { result?: string | boolean; message?: string; csrf?: string }
+
+function isDiaryJsonSuccess(json: DiaryJson | null): boolean {
+  if (!json) return false
+  const r = json.result
+  return r === true || r === 'success' || r === 'Success'
+}
+
+function isDiaryJsonFailure(json: DiaryJson | null): boolean {
+  if (!json) return false
+  const r = json.result
+  return r === false || r === 'failure' || r === 'Failure'
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
@@ -107,6 +121,45 @@ function extractTitle(html: string): string {
 function pathSlugFromFilmUrl(filmPageUrl: string): string {
   const u = new URL(filmPageUrl)
   return u.pathname.endsWith('/') ? u.pathname.slice(0, -1) : u.pathname
+}
+
+/** Parse all film hits from Letterboxd search results HTML. */
+function parseFilmsFromSearchHtml(html: string): LetterboxdFilm[] {
+  const results: LetterboxdFilm[] = []
+  const chunkRegex =
+    /data-postered-identifier="([^"]+)"[\s\S]{0,1200}?(?:data-item-link|data-film-link)="([^"]+)"[\s\S]{0,400}?(?:data-item-name|data-film-name)="([^"]+)"/gi
+
+  for (const match of html.matchAll(chunkRegex)) {
+    try {
+      const decoded = match[1].replace(/&quot;/g, '"')
+      const parsed = JSON.parse(decoded) as { uid?: string }
+      if (!parsed.uid) continue
+      const link = match[2]
+      const name = match[3]
+      results.push({
+        title: name,
+        url: `https://letterboxd.com${link}`,
+        slug: link,
+        uid: parsed.uid,
+      })
+    } catch {
+      continue
+    }
+  }
+  return results
+}
+
+function pickBestSearchMatch(films: LetterboxdFilm[], title: string, year?: number): LetterboxdFilm {
+  if (year) {
+    const yearStr = String(year)
+    const withYear = films.find(
+      (f) => f.title.includes(yearStr) && f.title.toLowerCase().includes(title.toLowerCase())
+    )
+    if (withYear) return withYear
+  }
+  const titleLower = title.toLowerCase()
+  const exactish = films.find((f) => f.title.toLowerCase().includes(titleLower))
+  return exactish ?? films[0]
 }
 
 function parseFilmFromPageHtml(html: string, filmPageUrl: string): LetterboxdFilm | null {
@@ -163,6 +216,9 @@ export class LetterboxdScraper {
       if (await this.validateSession()) {
         this.isLoggedIn = true
         this.csrfToken = this.jar.get('com.xk72.webparts.csrf') ?? null
+        if (this.onSessionCookies) {
+          await this.onSessionCookies(sessionCookiesFromJar(this.jar))
+        }
         return
       }
       // Stale cookies — discard and full login
@@ -283,7 +339,11 @@ export class LetterboxdScraper {
       if (json?.csrf) {
         this.jar.set('com.xk72.webparts.csrf', json.csrf)
       }
-      return this.validateSession()
+      if (await this.validateSession()) {
+        return true
+      }
+      console.warn('Letterboxd: login JSON succeeded but session validation failed; trying browser fallback')
+      return this.browserFallbackLogin(username, password)
     }
 
     console.error('Letterboxd login unexpected response:', text.slice(0, 500))
@@ -355,6 +415,11 @@ export class LetterboxdScraper {
     const html = await res.text()
     if (!res.ok || isCloudflareChallenge(html, res.status, res.headers)) {
       return null
+    }
+
+    const searchHits = parseFilmsFromSearchHtml(html)
+    if (searchHits.length > 0) {
+      return pickBestSearchMatch(searchHits, title, year)
     }
 
     const slugMatch = html.match(/class="[^"]*react-component[^"]*figure[^"]*"[^>]*data-item-slug="([^"]+)"/)
@@ -429,18 +494,17 @@ export class LetterboxdScraper {
       viewingableUID: film.uid,
     })
 
-    const response = await fetch('https://letterboxd.com/s/save-diary-entry', {
+    const response = await this.rawFetch('https://letterboxd.com/s/save-diary-entry', {
       method: 'POST',
       headers: {
-        accept: '*/*',
-        'accept-language': 'en-US,en;q=0.9',
-        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        cookie: this.getCookieString(),
-        dnt: '1',
-        origin: 'https://letterboxd.com',
-        referer: film.url,
-        'user-agent': CHROME_USER_AGENT,
-        'x-requested-with': 'XMLHttpRequest',
+        Accept: '*/*',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        Origin: 'https://letterboxd.com',
+        Referer: film.url,
+        'X-Requested-With': 'XMLHttpRequest',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Dest': 'empty',
       },
       body: formData.toString(),
     })
@@ -451,7 +515,31 @@ export class LetterboxdScraper {
       return false
     }
 
+    if (isCloudflareChallenge(responseText, response.status, response.headers)) {
+      console.error('Diary entry blocked by Cloudflare challenge')
+      return false
+    }
+
+    const json = tryParseJson(responseText) as DiaryJson | null
+    if (isDiaryJsonFailure(json)) {
+      console.error('Diary entry rejected:', json?.message?.trim() || responseText.slice(0, 500))
+      return false
+    }
+    if (json?.csrf) {
+      this.jar.set('com.xk72.webparts.csrf', json.csrf)
+      this.csrfToken = json.csrf
+    }
+    if (isDiaryJsonSuccess(json)) {
+      if (this.onSessionCookies) {
+        await this.onSessionCookies(sessionCookiesFromJar(this.jar))
+      }
+      return true
+    }
+
     if (response.ok) {
+      if (this.onSessionCookies) {
+        await this.onSessionCookies(sessionCookiesFromJar(this.jar))
+      }
       return true
     }
     console.error('HTTP request failed:', response.status, responseText.slice(0, 500))
@@ -545,7 +633,7 @@ export class LetterboxdScraper {
 
   /** No-op (kept for callers that used Puppeteer's close). */
   async close(): Promise<void> {
-    this.isLoggedIn = false
+    /* session is request-scoped; do not clear isLoggedIn before callers finish */
   }
 }
 
