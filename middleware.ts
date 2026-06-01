@@ -6,8 +6,10 @@ import {
   plexWebhookIgnoredResponse,
 } from './app/lib/plex-webhook-ingress.js';
 
+// Exact /webhook and /webhook/<token> only — not /webhook-settings (path-to-regexp already
+// excludes that; listed explicitly for clarity).
 export const config = {
-  matcher: ['/webhook', '/webhook/:path*'],
+  matcher: ['/webhook', '/webhook/:token+'],
 };
 
 /**

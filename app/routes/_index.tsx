@@ -1,4 +1,4 @@
-import { Link } from 'react-router'
+import { Link, data } from 'react-router'
 import type { LoaderFunctionArgs } from 'react-router'
 import { validateUserSession } from '../lib/plex-session.js'
 
@@ -12,7 +12,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const success = url.searchParams.get('success')
   const error = url.searchParams.get('error')
 
-  return { user, success, error, headers }
+  return data({ user, success, error }, headers ? { headers } : undefined)
 }
 
 export default function Home({
@@ -38,7 +38,12 @@ export default function Home({
           {success && (
             <div className='retro-alert border-emerald-600 bg-emerald-100 p-4 text-emerald-800'>
               <p className='text-center font-bold'>
-                ✓ {success === 'plex_connected' ? 'Plex account connected successfully!' : 'Success!'}
+                ✓{' '}
+                {success === 'plex_connected'
+                  ? 'Plex account connected successfully!'
+                  : success === 'letterboxd_connected'
+                    ? 'Letterboxd connected successfully!'
+                    : 'Success!'}
               </p>
             </div>
           )}

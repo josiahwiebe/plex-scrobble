@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router'
 import { Form, redirect, Link } from 'react-router'
-import { validateUserSession } from '../lib/plex-session.js'
-import { updateUser } from '../lib/database.js'
+import { createUserSession, validateUserSession } from '../lib/plex-session.js'
+import { getUserById, updateUser } from '../lib/database.js'
 import { encryptPassword, getUserPassword } from '../lib/password.js'
 import { createLetterboxdSession } from '../lib/letterboxd-scraper.js'
 
@@ -89,7 +89,15 @@ export async function action({ request }: ActionFunctionArgs) {
       return redirect('/letterboxd?error=letterboxd_login_failed')
     }
 
-    return redirect('/?success=letterboxd_connected')
+    const freshUser = await getUserById(user.id)
+    if (!freshUser) {
+      return redirect('/letterboxd?error=save_failed')
+    }
+
+    const sessionCookie = await createUserSession(freshUser, request)
+    return redirect('/?success=letterboxd_connected', {
+      headers: { 'Set-Cookie': sessionCookie },
+    })
   } catch (error) {
     console.error('Error saving Letterboxd credentials:', error)
     return redirect('/letterboxd?error=save_failed')

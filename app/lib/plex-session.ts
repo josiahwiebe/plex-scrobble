@@ -41,40 +41,47 @@ export async function clearPlexPin(request: Request): Promise<string> {
   return commitSession(session)
 }
 
+/** Resolves user id from session (current `userId` key or legacy full `user` blob). */
+function getSessionUserId(session: Awaited<ReturnType<typeof getSession>>): string | null {
+  const userId = session.get('userId') as string | undefined
+  if (userId) {
+    return userId
+  }
+
+  const legacyUser = session.get('user') as User | undefined
+  return legacyUser?.id ?? null
+}
+
 export async function createUserSession(user: User, request: Request): Promise<string> {
   const session = await getSession(request.headers.get('Cookie'))
   session.unset('plexPin')
-  session.set('user', user)
+  session.unset('user')
+  session.set('userId', user.id)
   return commitSession(session)
 }
 
 export async function getUserFromSession(request: Request): Promise<User | null> {
   const session = await getSession(request.headers.get('Cookie'))
-  const user = session.get('user')
+  const userId = getSessionUserId(session)
 
-  if (!user) {
+  if (!userId) {
     return null
   }
 
-  const dbUser = await getUserById(user.id)
-  if (!dbUser) {
-    return null
-  }
-
-  return user
+  return getUserById(userId)
 }
 
 export async function validateUserSession(
   request: Request
 ): Promise<{ user: User | null; headers?: { 'Set-Cookie': string } }> {
   const session = await getSession(request.headers.get('Cookie'))
-  const user = session.get('user')
+  const userId = getSessionUserId(session)
 
-  if (!user) {
+  if (!userId) {
     return { user: null }
   }
 
-  const dbUser = await getUserById(user.id)
+  const dbUser = await getUserById(userId)
   if (!dbUser) {
     const destroyedSessionCookie = await destroyUserSession(request)
     return {
@@ -83,7 +90,16 @@ export async function validateUserSession(
     }
   }
 
-  return { user }
+  // Migrate legacy sessions that stored the full user row (can exceed cookie size once
+  // Letterboxd session cookies are persisted on the user record).
+  if (session.get('user') || session.get('userId') !== dbUser.id) {
+    session.unset('user')
+    session.set('userId', dbUser.id)
+    const sessionCookie = await commitSession(session)
+    return { user: dbUser, headers: { 'Set-Cookie': sessionCookie } }
+  }
+
+  return { user: dbUser }
 }
 
 export async function destroyUserSession(request: Request): Promise<string> {
