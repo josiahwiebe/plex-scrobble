@@ -1,6 +1,15 @@
 import type { PlexWebhookEvent, LetterboxdFilm, LetterboxdWatchOptions, ScrobbleResult } from '../../types.js'
 import type { LetterboxdSessionCookie, WebhookSettings } from './schema.js'
 import { letterboxdLoginViaPuppeteer } from './letterboxd-puppeteer-login.js'
+import {
+  buildFilmSearchUrl,
+  hasLocalLetterboxdSessionSignals,
+  isLetterboxdFilmPageHtml,
+  parseFilmFromPageHtml,
+  parseFilmsFromSearchHtml,
+  pickBestSearchMatch,
+  type LetterboxdFilmSearchHit,
+} from './letterboxd-parse.js'
 
 const CHROME_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -107,101 +116,6 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function extractTitle(html: string): string {
-  const og = html.match(/property="og:title"\s+content="([^"]+)"/)
-  if (og) {
-    return og[1]
-      .replace(/\s*\(\d{4}\)\s*\|\s*Letterboxd\s*$/i, '')
-      .replace(/\s*\|\s*Letterboxd\s*$/i, '')
-      .trim()
-  }
-  const h1 = html.match(/<h1[^>]*class="[^"]*headline[^"]*"[^>]*>([^<]+)</i)
-  if (h1) return h1[1].trim()
-  return 'Unknown'
-}
-
-function pathSlugFromFilmUrl(filmPageUrl: string): string {
-  const u = new URL(filmPageUrl)
-  return u.pathname.endsWith('/') ? u.pathname.slice(0, -1) : u.pathname
-}
-
-/** Parse all film hits from Letterboxd search results HTML. */
-function parseFilmsFromSearchHtml(html: string): LetterboxdFilm[] {
-  const results: LetterboxdFilm[] = []
-  const chunkRegex =
-    /data-postered-identifier="([^"]+)"[\s\S]{0,1200}?(?:data-item-link|data-film-link)="([^"]+)"[\s\S]{0,400}?(?:data-item-name|data-film-name)="([^"]+)"/gi
-
-  for (const match of html.matchAll(chunkRegex)) {
-    try {
-      const decoded = match[1].replace(/&quot;/g, '"')
-      const parsed = JSON.parse(decoded) as { uid?: string }
-      if (!parsed.uid) continue
-      const link = match[2]
-      const name = match[3]
-      results.push({
-        title: name,
-        url: `https://letterboxd.com${link}`,
-        slug: link,
-        uid: parsed.uid,
-      })
-    } catch {
-      continue
-    }
-  }
-  return results
-}
-
-function pickBestSearchMatch(films: LetterboxdFilm[], title: string, year?: number): LetterboxdFilm {
-  if (year) {
-    const yearStr = String(year)
-    const withYear = films.find(
-      (f) => f.title.includes(yearStr) && f.title.toLowerCase().includes(title.toLowerCase())
-    )
-    if (withYear) return withYear
-  }
-  const titleLower = title.toLowerCase()
-  const exactish = films.find((f) => f.title.toLowerCase().includes(titleLower))
-  return exactish ?? films[0]
-}
-
-function parseFilmFromPageHtml(html: string, filmPageUrl: string): LetterboxdFilm | null {
-  const posterMatch = html.match(/data-postered-identifier="([^"]+)"/)
-  if (posterMatch) {
-    try {
-      const decoded = posterMatch[1].replace(/&quot;/g, '"')
-      const parsed = JSON.parse(decoded) as { uid?: string }
-      if (parsed.uid) {
-        return {
-          title: extractTitle(html),
-          url: filmPageUrl,
-          slug: pathSlugFromFilmUrl(filmPageUrl),
-          uid: parsed.uid,
-        }
-      }
-    } catch {
-      /* fall through */
-    }
-  }
-
-  const uidMatch = html.match(/data-item-uid="([^"]+)"/)
-  if (uidMatch) {
-    let uid = uidMatch[1]
-    if (!uid.includes(':') && /^\d+$/.test(uid)) uid = `film:${uid}`
-    return {
-      title: extractTitle(html),
-      url: filmPageUrl,
-      slug: pathSlugFromFilmUrl(filmPageUrl),
-      uid,
-    }
-  }
-
-  return null
-}
-
 /**
  * Letterboxd client: fetch-based login + HTTP diary entry (Vercel/Node compatible).
  */
@@ -260,6 +174,10 @@ export class LetterboxdScraper {
    * (users may log in with email). /settings/ redirects to sign-in when unauthenticated.
    */
   private async validateSession(): Promise<boolean> {
+    if (!hasLocalLetterboxdSessionSignals(this.jar)) {
+      return false
+    }
+
     const res = await this.rawFetch('https://letterboxd.com/settings/', {
       redirect: 'follow',
     })
@@ -372,10 +290,6 @@ export class LetterboxdScraper {
     return this.validateSession()
   }
 
-  private getCookieString(): string {
-    return buildCookieHeader(this.jar)
-  }
-
   private extractExternalIds(plexEvent: PlexWebhookEvent): { imdb?: string; tmdb?: string } {
     const guids = plexEvent.Metadata.Guid || []
     const ids: { imdb?: string; tmdb?: string } = {}
@@ -397,6 +311,43 @@ export class LetterboxdScraper {
     if (!res.ok || isCloudflareChallenge(html, res.status, res.headers)) {
       return null
     }
+    if (!isLetterboxdFilmPageHtml(html)) {
+      return null
+    }
+    return parseFilmFromPageHtml(html, res.url)
+  }
+
+  private async fetchSearchResultsHtml(title: string): Promise<string | null> {
+    const urls = [
+      buildFilmSearchUrl(title),
+      `https://letterboxd.com/search/films/${encodeURIComponent(title)}/`,
+    ]
+
+    for (const url of urls) {
+      const res = await this.rawFetch(url, { redirect: 'follow' })
+      mergeResponseCookies(res, this.jar)
+      const html = await res.text()
+      if (res.ok && !isCloudflareChallenge(html, res.status, res.headers)) {
+        return html
+      }
+    }
+    return null
+  }
+
+  private async resolveSearchHit(hit: LetterboxdFilmSearchHit): Promise<LetterboxdFilm | null> {
+    if (hit.uid) {
+      return { title: hit.title, url: hit.url, slug: hit.slug, uid: hit.uid }
+    }
+
+    const res = await this.rawFetch(hit.url, { redirect: 'follow' })
+    mergeResponseCookies(res, this.jar)
+    const html = await res.text()
+    if (!res.ok || isCloudflareChallenge(html, res.status, res.headers)) {
+      return null
+    }
+    if (!isLetterboxdFilmPageHtml(html)) {
+      return null
+    }
     return parseFilmFromPageHtml(html, res.url)
   }
 
@@ -415,61 +366,15 @@ export class LetterboxdScraper {
       if (r) return r
     }
 
-    const q = encodeURIComponent(title)
-    const res = await this.rawFetch(`https://letterboxd.com/search/films/${q}/`, { redirect: 'follow' })
-    mergeResponseCookies(res, this.jar)
-    const html = await res.text()
-    if (!res.ok || isCloudflareChallenge(html, res.status, res.headers)) {
+    const html = await this.fetchSearchResultsHtml(title)
+    if (!html) {
       return null
     }
 
     const searchHits = parseFilmsFromSearchHtml(html)
     if (searchHits.length > 0) {
-      return pickBestSearchMatch(searchHits, title, year)
-    }
-
-    const slugMatch = html.match(/class="[^"]*react-component[^"]*figure[^"]*"[^>]*data-item-slug="([^"]+)"/)
-    const linkMatch = html.match(/data-item-link="([^"]+)"/) ?? html.match(/data-film-link="([^"]+)"/)
-    const nameMatch = html.match(/data-item-name="([^"]+)"/) ?? html.match(/data-film-name="([^"]+)"/)
-    const uidFromPoster = html.match(/data-postered-identifier="([^"]+)"/)
-
-    if (uidFromPoster) {
-      try {
-        const decoded = uidFromPoster[1].replace(/&quot;/g, '"')
-        const parsed = JSON.parse(decoded) as { uid?: string }
-        if (parsed.uid && linkMatch) {
-          const filmUrl = `https://letterboxd.com${linkMatch[1]}`
-          return {
-            title: nameMatch?.[1] ?? title,
-            url: filmUrl,
-            slug: linkMatch[1],
-            uid: parsed.uid,
-          }
-        }
-      } catch {
-        /* fall through */
-      }
-    }
-
-    if (slugMatch && linkMatch) {
-      const filmPath = linkMatch[1]
-      const filmUrl = `https://letterboxd.com${filmPath}`
-      const filmPage = await this.rawFetch(`${filmUrl}`, { redirect: 'follow' })
-      mergeResponseCookies(filmPage, this.jar)
-      const pageHtml = await filmPage.text()
-      const film = parseFilmFromPageHtml(pageHtml, filmPage.url)
-      if (film) return film
-    }
-
-    if (year) {
-      const re = new RegExp(`data-item-name="([^"]*${escapeRegex(title)}[^"]*${year}[^"]*)"`, 'i')
-      const m = html.match(re)
-      if (m && linkMatch) {
-        const filmUrl = `https://letterboxd.com${linkMatch[1]}`
-        const filmPage = await this.rawFetch(filmUrl, { redirect: 'follow' })
-        const pageHtml = await filmPage.text()
-        return parseFilmFromPageHtml(pageHtml, filmPage.url)
-      }
+      const best = pickBestSearchMatch(searchHits, title, year)
+      return this.resolveSearchHit(best)
     }
 
     return null
