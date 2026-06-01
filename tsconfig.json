@@ -21,6 +21,6 @@
     },
     "types": ["node", "vite/client"]
   },
-  "include": ["app/**/*", "react-router.config.ts", "vite.config.ts", "types.ts"],
+  "include": ["app/**/*", "middleware.ts", "react-router.config.ts", "vite.config.ts", "types.ts"],
   "exclude": ["node_modules"]
 }
