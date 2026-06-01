@@ -77,6 +77,7 @@ export default function Home({
             {!user?.plexId && (
               <Link
                 to='/auth/plex'
+                reloadDocument
                 className='retro-button block w-full bg-gradient-to-r from-orange-400 to-orange-500 p-6 text-center text-xl text-black no-underline hover:from-orange-300 hover:to-orange-400'
               >
                 🎬 CONNECT PLEX ACCOUNT

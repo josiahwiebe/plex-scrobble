@@ -3,6 +3,6 @@ import { vercelPreset } from '@vercel/react-router/vite'
 
 export default {
   ssr: true,
-  prerender: ['/'],
+  // Home is auth-dependent; prerendering it caused hydration mismatches after login.
   presets: [vercelPreset()],
 } satisfies Config

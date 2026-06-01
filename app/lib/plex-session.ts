@@ -24,6 +24,8 @@ export interface PlexPinData {
 
 export async function storePlexPin(request: Request, pinData: PlexPinData): Promise<string> {
   const session = await getSession(request.headers.get('Cookie'))
+  // Drop legacy full-user blob so the PIN cookie fits (4KB limit).
+  session.unset('user')
   session.set('plexPin', pinData)
   return commitSession(session, {
     maxAge: 60 * 10, // 10 minutes for PIN data
@@ -90,9 +92,8 @@ export async function validateUserSession(
     }
   }
 
-  // Migrate legacy sessions that stored the full user row (can exceed cookie size once
-  // Letterboxd session cookies are persisted on the user record).
-  if (session.get('user') || session.get('userId') !== dbUser.id) {
+  // Migrate legacy sessions that stored the full user row (can exceed cookie size).
+  if (session.get('user')) {
     session.unset('user')
     session.set('userId', dbUser.id)
     const sessionCookie = await commitSession(session)
