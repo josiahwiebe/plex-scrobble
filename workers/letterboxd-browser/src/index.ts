@@ -64,7 +64,7 @@ async function launchBrowserWithRetries(
   throw new Error('launchBrowserWithRetries: unreachable')
 }
 
-type LoginJson = { result?: string | boolean; message?: string }
+type LoginJson = { result?: string | boolean; message?: string; csrf?: string }
 
 function tryParseLoginResponse(text: string): LoginJson | null {
   const t = text.trim()
@@ -76,19 +76,72 @@ function tryParseLoginResponse(text: string): LoginJson | null {
   }
 }
 
+function isLoginJsonSuccess(json: LoginJson | null): boolean {
+  if (!json) return false
+  const r = json.result
+  return r === true || r === 'success' || r === 'Success'
+}
+
 function isLoginJsonFailure(json: LoginJson | null): boolean {
   if (!json) return false
   const r = json.result
   return r === false || r === 'failure' || r === 'Failure'
 }
 
-function htmlLooksLikeCloudflareChallenge(html: string): boolean {
+function hasLetterboxdSessionCookies(cookies: { name: string; value: string }[]): boolean {
+  return cookies.some((c) => c.name === 'com.xk72.webparts.csrf' && c.value.length > 0)
+}
+
+async function readLetterboxdCookies(page: BrowserPage): Promise<{ name: string; value: string }[]> {
+  const cookieList = await page.cookies('https://letterboxd.com')
+  return cookieList.map((c) => ({ name: c.name, value: c.value }))
+}
+
+async function waitForSessionCookies(page: BrowserPage, timeoutMs = 20_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (hasLetterboxdSessionCookies(await readLetterboxdCookies(page))) {
+      return true
+    }
+    await sleep(400)
+  }
+  return false
+}
+
+/** Full-page Cloudflare interstitial — not Turnstile assets embedded on a normal sign-in page. */
+function htmlLooksLikeCloudflareInterstitial(html: string): boolean {
+  const hasSignInForm = html.includes('name="username"') && html.includes('name="password"')
+  if (hasSignInForm) {
+    return false
+  }
   return (
-    html.includes('cf-turnstile') ||
-    html.includes('challenge-platform') ||
+    /just a moment/i.test(html) ||
     html.includes('cf-browser-verification') ||
-    /just a moment/i.test(html)
+    html.includes('challenge-platform')
   )
+}
+
+function htmlLooksLikeCloudflareChallenge(html: string): boolean {
+  return htmlLooksLikeCloudflareInterstitial(html)
+}
+
+type BrowserPage = Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>['newPage']>>
+
+async function waitForSignInPage(page: BrowserPage): Promise<void> {
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    const html = await page.content()
+    if (!htmlLooksLikeCloudflareInterstitial(html)) {
+      try {
+        await page.waitForSelector('input[name="username"]', { timeout: 5000, visible: true })
+        return
+      } catch {
+        /* still loading */
+      }
+    }
+    await sleep(1500)
+  }
+  await page.waitForSelector('input[name="username"]', { timeout: 5000, visible: true })
 }
 
 function responseForLaunchFailure(e: unknown): Response {
@@ -144,18 +197,20 @@ export default {
 
     try {
       const page = await browser.newPage()
-      await page.setUserAgent(
+      const userAgent =
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      )
+      await page.setUserAgent(userAgent)
+      await page.setViewport({ width: 1280, height: 800 })
+      await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' })
 
       await page.goto('https://letterboxd.com/sign-in/', {
-        waitUntil: 'domcontentloaded',
+        waitUntil: 'networkidle2',
         timeout: 60000,
       })
-      await page.waitForSelector('input[name="username"]', { timeout: 45000 })
+      await waitForSignInPage(page)
 
-      let signInHtml = await page.content()
-      if (htmlLooksLikeCloudflareChallenge(signInHtml)) {
+      const signInHtml = await page.content()
+      if (htmlLooksLikeCloudflareInterstitial(signInHtml)) {
         return Response.json(
           { error: 'Letterboxd sign-in page is behind a Cloudflare challenge (worker could not pass it)' },
           { status: 503 }
@@ -178,12 +233,14 @@ export default {
 
       await page.click('button[type="submit"]')
 
-      let loginJson: { result?: string | boolean; message?: string } | null = null
+      let loginJson: LoginJson | null = null
+      let loginHttpStatus: number | null = null
       try {
         const loginRes = await loginResponsePromise
+        loginHttpStatus = loginRes.status()
         loginJson = tryParseLoginResponse(await loginRes.text())
       } catch {
-        /* non-JSON or timeout — fall through to profile check */
+        /* login.do timeout — may still have set cookies; validate below */
       }
 
       if (isLoginJsonFailure(loginJson)) {
@@ -193,18 +250,33 @@ export default {
         )
       }
 
-      // Login is usually XHR + in-place DOM update; give the client bundle time to apply cookies / UI.
-      await new Promise((r) => setTimeout(r, 2000))
+      const sessionFromLogin =
+        isLoginJsonSuccess(loginJson) || (await waitForSessionCookies(page))
 
-      // Use /settings/ — username may be email, not public profile slug.
+      if (sessionFromLogin) {
+        const cookies = await readLetterboxdCookies(page)
+        if (hasLetterboxdSessionCookies(cookies)) {
+          return Response.json({ cookies })
+        }
+      }
+
+      // Fallback: /settings/ works when login is email-based (no public profile slug).
       await page.goto('https://letterboxd.com/settings/', {
-        waitUntil: 'domcontentloaded',
+        waitUntil: 'networkidle2',
         timeout: 60000,
       })
 
       const pageUrl = page.url()
       if (pageUrl.includes('/sign-in')) {
-        return Response.json({ error: 'Login did not complete (redirected to sign-in)' }, { status: 401 })
+        const hint = loginJson?.message?.trim()
+        return Response.json(
+          {
+            error: hint
+              ? `Login failed: ${hint}`
+              : 'Login did not complete (redirected to sign-in)',
+          },
+          { status: 401 }
+        )
       }
 
       const html = await page.content()
@@ -215,17 +287,36 @@ export default {
         )
       }
 
-      const looksLikeLoginForm = html.includes('name="password"') && html.includes('name="username"')
-      const signedIn =
-        !looksLikeLoginForm &&
-        (/sign\s*out/i.test(html) || /\/sign-out\/?/i.test(html) || (await page.$('[href*="sign-out"]')) !== null)
-      if (!signedIn) {
-        return Response.json({ error: 'Login did not complete (settings check failed)' }, { status: 401 })
+      try {
+        await page.waitForSelector('a[href*="sign-out"], [href*="/sign-out"]', { timeout: 12_000 })
+      } catch {
+        /* nav may use different markup; cookie check below is authoritative */
       }
 
-      const cookieList = await page.cookies('https://letterboxd.com')
-      const cookies = cookieList.map((c) => ({ name: c.name, value: c.value }))
-      return Response.json({ cookies })
+      const cookies = await readLetterboxdCookies(page)
+      if (hasLetterboxdSessionCookies(cookies)) {
+        return Response.json({ cookies })
+      }
+
+      const looksLikeSignInForm =
+        html.includes('name="username"') &&
+        html.includes('name="password"') &&
+        html.includes('/sign-in')
+      const detail = [
+        loginJson ? `login.do result=${String(loginJson.result)}` : 'login.do response not captured',
+        loginHttpStatus != null ? `http=${loginHttpStatus}` : null,
+        `url=${pageUrl}`,
+        looksLikeSignInForm ? 'still on sign-in form' : 'settings page loaded without session cookies',
+      ]
+        .filter(Boolean)
+        .join('; ')
+      console.error('letterboxd-browser-worker login failed:', detail)
+      return Response.json(
+        {
+          error: loginJson?.message?.trim() || `Login did not complete (${detail})`,
+        },
+        { status: 401 }
+      )
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       console.error('letterboxd-browser-worker', message)

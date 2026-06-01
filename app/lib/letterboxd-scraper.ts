@@ -50,11 +50,17 @@ export function sessionCookiesFromJar(jar: Map<string, string>): LetterboxdSessi
 
 function isCloudflareChallenge(html: string, status: number, headers: Headers): boolean {
   if (headers.get('cf-mitigated')) return true
-  if (status === 403 && (html.includes('cf-browser-verification') || html.includes('Just a moment'))) {
+  const hasSignInForm = html.includes('name="username"') && html.includes('name="password"')
+  if (status === 403 && (html.includes('cf-browser-verification') || /just a moment/i.test(html))) {
     return true
   }
+  if (hasSignInForm) {
+    return false
+  }
   return (
-    html.includes('cf-turnstile') || html.includes('challenge-platform') || html.includes('cf-browser-verification')
+    /just a moment/i.test(html) ||
+    html.includes('cf-browser-verification') ||
+    html.includes('challenge-platform')
   )
 }
 

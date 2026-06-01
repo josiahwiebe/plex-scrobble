@@ -36,10 +36,13 @@ export async function letterboxdLoginViaBrowserRendering(
       return null
     }
 
-    if (res.status === 429 && attempt < maxAttempts) {
+    if ((res.status === 429 || res.status === 503) && attempt < maxAttempts) {
       const retryAfter = parseInt(res.headers.get('Retry-After') ?? '20', 10)
-      const waitMs = Math.min(1000 * (Number.isNaN(retryAfter) ? 20 : retryAfter), 120_000)
-      console.warn(`Letterboxd browser rendering 429, retry after ${waitMs}ms (${attempt}/${maxAttempts})`)
+      const defaultWait = res.status === 503 ? 8 : 20
+      const waitMs = Math.min(1000 * (Number.isNaN(retryAfter) ? defaultWait : retryAfter), 120_000)
+      console.warn(
+        `Letterboxd browser rendering ${res.status}, retry after ${waitMs}ms (${attempt}/${maxAttempts})`
+      )
       await sleep(waitMs)
       continue
     }
