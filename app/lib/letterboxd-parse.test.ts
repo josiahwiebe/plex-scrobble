@@ -5,6 +5,7 @@ import {
   buildFilmSearchUrl,
   extractNameYearFromMovieTitle,
   hasLocalLetterboxdSessionSignals,
+  hasMinimalLetterboxdSession,
   isLetterboxdFilmPageHtml,
   parseFilmFromPageHtml,
   parseFilmsFromSearchHtml,
@@ -88,6 +89,20 @@ describe('session helpers', () => {
     expect(hasLocalLetterboxdSessionSignals(jar)).toBe(false)
     jar.set('letterboxd.signed.in.as', 'josiah')
     expect(hasLocalLetterboxdSessionSignals(jar)).toBe(true)
+  })
+
+  test('accepts letterboxd.user cookie', () => {
+    const jar = new Map<string, string>([['letterboxd.user', 'abc123']])
+    expect(hasLocalLetterboxdSessionSignals(jar)).toBe(true)
+  })
+
+  test('hasMinimalLetterboxdSession requires csrf and user', () => {
+    const jar = new Map<string, string>()
+    expect(hasMinimalLetterboxdSession(jar)).toBe(false)
+    jar.set('com.xk72.webparts.csrf', 'token')
+    expect(hasMinimalLetterboxdSession(jar)).toBe(false)
+    jar.set('letterboxd.signed.in.as', 'josiah')
+    expect(hasMinimalLetterboxdSession(jar)).toBe(true)
   })
 })
 

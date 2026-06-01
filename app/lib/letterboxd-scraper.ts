@@ -3,7 +3,7 @@ import type { LetterboxdSessionCookie, WebhookSettings } from './schema.js'
 import { letterboxdLoginViaPuppeteer } from './letterboxd-puppeteer-login.js'
 import {
   buildFilmSearchUrl,
-  hasLocalLetterboxdSessionSignals,
+  hasMinimalLetterboxdSession,
   isLetterboxdFilmPageHtml,
   parseFilmFromPageHtml,
   parseFilmsFromSearchHtml,
@@ -174,7 +174,7 @@ export class LetterboxdScraper {
    * (users may log in with email). /settings/ redirects to sign-in when unauthenticated.
    */
   private async validateSession(): Promise<boolean> {
-    if (!hasLocalLetterboxdSessionSignals(this.jar)) {
+    if (!hasMinimalLetterboxdSession(this.jar)) {
       return false
     }
 
@@ -184,7 +184,10 @@ export class LetterboxdScraper {
     mergeResponseCookies(res, this.jar)
     const html = await res.text()
     if (!res.ok) return false
-    if (isCloudflareChallenge(html, res.status, res.headers)) return false
+    if (isCloudflareChallenge(html, res.status, res.headers)) {
+      // Fetch often hits CF on serverless; trust cookies from a real browser login.
+      return hasMinimalLetterboxdSession(this.jar)
+    }
     const url = res.url
     if (url.includes('/sign-in')) return false
     const looksAuthed =
@@ -214,7 +217,16 @@ export class LetterboxdScraper {
     return false
   }
 
+  /** True when login already established a usable cookie jar (skip redundant fetch/puppeteer). */
+  private hasEstablishedSession(): boolean {
+    return hasMinimalLetterboxdSession(this.jar)
+  }
+
   private async loginOnce(username: string, password: string): Promise<boolean> {
+    if (this.hasEstablishedSession()) {
+      return true
+    }
+
     const res1 = await this.rawFetch('https://letterboxd.com/sign-in/', { redirect: 'follow' })
     mergeResponseCookies(res1, this.jar)
     const html1 = await res1.text()
@@ -263,10 +275,10 @@ export class LetterboxdScraper {
       if (json?.csrf) {
         this.jar.set('com.xk72.webparts.csrf', json.csrf)
       }
-      if (await this.validateSession()) {
+      if (this.hasEstablishedSession() || (await this.validateSession())) {
         return true
       }
-      console.warn('Letterboxd: login JSON succeeded but session validation failed; trying browser fallback')
+      console.warn('Letterboxd: login JSON succeeded but fetch validation failed; trying browser fallback')
       return this.browserFallbackLogin(username, password)
     }
 
@@ -287,7 +299,17 @@ export class LetterboxdScraper {
       this.jar.set(c.name, c.value)
     }
     this.csrfToken = this.jar.get('com.xk72.webparts.csrf') ?? null
-    return this.validateSession()
+
+    if (this.hasEstablishedSession()) {
+      return true
+    }
+
+    if (await this.validateSession()) {
+      return true
+    }
+
+    console.error('Letterboxd: puppeteer returned cookies but no authenticated session signals')
+    return false
   }
 
   private extractExternalIds(plexEvent: PlexWebhookEvent): { imdb?: string; tmdb?: string } {

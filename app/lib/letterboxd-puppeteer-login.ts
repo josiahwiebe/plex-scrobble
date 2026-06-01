@@ -35,7 +35,11 @@ function isLoginJsonFailure(json: LoginJson | null): boolean {
 }
 
 function hasSessionCookies(cookies: LetterboxdSessionCookie[]): boolean {
-  return cookies.some((c) => c.name === 'com.xk72.webparts.csrf' && c.value.length > 0)
+  const hasCsrf = cookies.some((c) => c.name === 'com.xk72.webparts.csrf' && c.value.length > 0)
+  const hasUser =
+    cookies.some((c) => c.name === 'letterboxd.signed.in.as' && c.value.length > 0) ||
+    cookies.some((c) => c.name.startsWith('letterboxd.user') && c.value.length > 0)
+  return hasCsrf && hasUser
 }
 
 async function sleep(ms: number): Promise<void> {

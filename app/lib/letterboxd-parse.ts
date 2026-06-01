@@ -271,5 +271,19 @@ export function parseFilmFromPageHtml(html: string, filmPageUrl: string): Letter
 /** True if the cookie jar has a local signed-in signal (avoids pointless /settings/ calls). */
 export function hasLocalLetterboxdSessionSignals(jar: Map<string, string>): boolean {
   const signedIn = jar.get(USER_COOKIE)
-  return Boolean(signedIn && signedIn.length > 0)
+  if (signedIn && signedIn.length > 0) {
+    return true
+  }
+  for (const [name, value] of jar) {
+    if (name.startsWith('letterboxd.user') && value.length > 0) {
+      return true
+    }
+  }
+  return false
+}
+
+/** CSRF + signed-in cookies — enough to trust a browser-established session without fetch /settings/. */
+export function hasMinimalLetterboxdSession(jar: Map<string, string>): boolean {
+  const csrf = jar.get('com.xk72.webparts.csrf')
+  return Boolean(csrf && csrf.length > 0 && hasLocalLetterboxdSessionSignals(jar))
 }
