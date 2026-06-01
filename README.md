@@ -47,8 +47,8 @@ Production: set these in the Vercel project (or `.env` locally).
 
 ## Letterboxd
 
-- Login uses **HTTP** (CSRF + `/user/login.do`). Film matching prefers **IMDb/TMDB** redirect URLs when Plex provides those GUIDs.
-- Session cookies are persisted in the database for webhooks. If Letterboxd serves a Cloudflare challenge to plain `fetch`, login may fail until the challenge clears (no headless browser on Vercel by default).
+- Login uses **HTTP** (CSRF + `/user/login.do`) with **Puppeteer** fallback (`@sparticuz/chromium` on Vercel) when Cloudflare blocks fetch.
+- Session cookies are persisted in the database so webhooks usually skip login. Use **Test login** in settings to refresh cookies after password changes.
 
 ## Deploy (Vercel)
 

@@ -39,7 +39,7 @@
 - Drizzle ORM with PostgreSQL (Supabase) — use pooler connection string in `DATABASE_URL` for serverless
 - Webhook endpoint at `/webhook` and `/webhook/:token`; Vercel Routing Middleware (`middleware.ts`) filters irrelevant Plex events before React Router; background cookie persistence via `@vercel/functions` `waitUntil`
 - Ops note: Vercel Firewall rate-limiting on `/webhook*` can reduce noise from misconfigured Plex servers (multi-tenant — no IP allowlists)
-- Letterboxd: fetch-based session (stored cookies in DB); optional Cloudflare Worker (`workers/letterboxd-browser/`) with Browser Rendering — set ` ` + `LETTERBOXD_BROWSER_RENDERING_SECRET` on Vercel to bridge challenges
+- Letterboxd: fetch-based session (stored cookies in DB); Puppeteer + `@sparticuz/chromium` on Vercel when fetch hits Cloudflare (legacy optional worker in `workers/letterboxd-browser/`)
 
 ## Database Schema
 

@@ -1,6 +1,6 @@
 import type { PlexWebhookEvent, LetterboxdFilm, LetterboxdWatchOptions, ScrobbleResult } from '../../types.js'
 import type { LetterboxdSessionCookie, WebhookSettings } from './schema.js'
-import { letterboxdLoginViaBrowserRendering } from './letterboxd-browser-rendering.js'
+import { letterboxdLoginViaPuppeteer } from './letterboxd-puppeteer-login.js'
 
 const CHROME_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -357,10 +357,10 @@ export class LetterboxdScraper {
   }
 
   private async browserFallbackLogin(username: string, password: string): Promise<boolean> {
-    const remote = await letterboxdLoginViaBrowserRendering(username, password)
+    const remote = await letterboxdLoginViaPuppeteer(username, password)
     if (!remote?.length) {
       console.error(
-        'Letterboxd: browser worker did not return session cookies (check preceding "Letterboxd browser rendering" log — wrong password, profile check, CF challenge, or worker error).'
+        'Letterboxd: puppeteer login did not return session cookies (wrong password, CF challenge, or Chromium launch failed on Vercel).'
       )
       return false
     }
