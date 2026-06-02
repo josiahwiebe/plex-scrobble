@@ -287,6 +287,53 @@ export class LetterboxdScraper {
     return false
   }
 
+  /**
+   * POST login.do using cookies already in the jar (e.g. cf_clearance from Puppeteer).
+   */
+  private async postLoginWithJar(username: string, password: string): Promise<boolean> {
+    const csrf = this.jar.get('com.xk72.webparts.csrf')
+    if (!csrf) {
+      return false
+    }
+
+    const res = await this.rawFetch('https://letterboxd.com/user/login.do', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        Origin: 'https://letterboxd.com',
+        Referer: 'https://letterboxd.com/sign-in/',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Dest': 'empty',
+      },
+      body: new URLSearchParams({
+        __csrf: csrf,
+        username,
+        password,
+        remember: 'true',
+      }).toString(),
+    })
+    mergeResponseCookies(res, this.jar)
+    const text = await res.text()
+
+    if (isCloudflareChallenge(text, res.status, res.headers)) {
+      return false
+    }
+
+    const json = tryParseJson(text)
+    if (isLoginJsonFailure(json)) {
+      console.error('Letterboxd fetch login rejected:', json?.message?.trim() || text.slice(0, 300))
+      return false
+    }
+    if (json?.csrf) {
+      this.jar.set('com.xk72.webparts.csrf', json.csrf)
+      this.csrfToken = json.csrf
+    }
+    return isLoginJsonSuccess(json) || this.hasEstablishedSession()
+  }
+
   private async browserFallbackLogin(username: string, password: string): Promise<boolean> {
     const remote = await letterboxdLoginViaPuppeteer(username, password)
     if (!remote?.length) {
@@ -303,6 +350,14 @@ export class LetterboxdScraper {
 
     if (this.hasEstablishedSession()) {
       return true
+    }
+
+    // Puppeteer often yields cf_clearance + csrf only — complete login via fetch in Node.
+    if (this.jar.has('cf_clearance')) {
+      console.log('Letterboxd: completing login via fetch using Cloudflare cookies from browser…')
+      if ((await this.postLoginWithJar(username, password)) && this.hasEstablishedSession()) {
+        return true
+      }
     }
 
     if (await this.validateSession()) {

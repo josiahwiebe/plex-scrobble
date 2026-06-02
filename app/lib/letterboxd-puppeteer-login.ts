@@ -13,6 +13,13 @@ type PageInstance = any
 
 type LoginJson = { result?: string | boolean; message?: string; csrf?: string }
 
+type PageLoginResult = {
+  ok: boolean
+  status: number
+  json: LoginJson | null
+  error?: string
+}
+
 function tryParseLoginResponse(text: string): LoginJson | null {
   const t = text.trim()
   if (!t.startsWith('{')) return null
@@ -105,6 +112,16 @@ function htmlLooksLikeCloudflareInterstitial(html: string): boolean {
   )
 }
 
+function htmlLooksAuthed(html: string): boolean {
+  const hasSignOut =
+    /sign\s*out/i.test(html) || /\/sign-out\/?/i.test(html) || /href="[^"]*sign-out/i.test(html)
+  const onLoginForm =
+    html.includes('name="password"') &&
+    html.includes('name="username"') &&
+    (html.includes('/sign-in') || html.includes('Sign in to continue'))
+  return hasSignOut && !onLoginForm
+}
+
 async function waitForCloudflare(page: PageInstance, maxWaitMs = 45_000): Promise<void> {
   const start = Date.now()
   while (Date.now() - start < maxWaitMs) {
@@ -119,20 +136,88 @@ async function waitForCloudflare(page: PageInstance, maxWaitMs = 45_000): Promis
   console.warn('Letterboxd puppeteer: Cloudflare interstitial did not clear in time')
 }
 
-async function readCookies(page: PageInstance): Promise<LetterboxdSessionCookie[]> {
-  const list = await page.cookies(LETTERBOXD_ORIGIN)
-  return list.map((c: { name: string; value: string }) => ({ name: c.name, value: c.value }))
+/** All letterboxd.com cookies (including HttpOnly session cookies). */
+async function readLetterboxdCookies(page: PageInstance): Promise<LetterboxdSessionCookie[]> {
+  const list = await page.cookies()
+  return list
+    .filter((c: { domain?: string }) => c.domain?.includes('letterboxd.com'))
+    .map((c: { name: string; value: string }) => ({ name: c.name, value: c.value }))
 }
 
-async function waitForCsrfCookie(page: PageInstance, timeoutMs = 30_000): Promise<boolean> {
+async function waitForMinimalSession(page: PageInstance, timeoutMs = 35_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (hasCsrfCookie(await readCookies(page))) {
+    if (hasMinimalLetterboxdSession(cookiesToJar(await readLetterboxdCookies(page)))) {
       return true
     }
     await sleep(500)
   }
   return false
+}
+
+/**
+ * POST /user/login.do from the page JS context (same cookies as a real browser submit).
+ * More reliable than clicking submit on Vercel Chromium.
+ */
+async function postLoginFromPage(
+  page: PageInstance,
+  username: string,
+  password: string
+): Promise<PageLoginResult> {
+  return page.evaluate(
+    async (user: string, pass: string) => {
+      const readCsrf = () => {
+        const match = document.cookie
+          .split('; ')
+          .find((c) => c.startsWith('com.xk72.webparts.csrf='))
+        return match ? decodeURIComponent(match.split('=').slice(1).join('=')) : null
+      }
+
+      const csrf = readCsrf()
+      if (!csrf) {
+        return { ok: false, status: 0, json: null, error: 'missing_csrf_cookie' }
+      }
+
+      const body = new URLSearchParams({
+        __csrf: csrf,
+        username: user,
+        password: pass,
+        remember: 'true',
+      })
+
+      try {
+        const res = await fetch('/user/login.do', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            Accept: 'application/json, text/javascript, */*; q=0.01',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body: body.toString(),
+          credentials: 'include',
+        })
+        const text = await res.text()
+        let json: LoginJson | null = null
+        if (text.trim().startsWith('{')) {
+          try {
+            json = JSON.parse(text) as LoginJson
+          } catch {
+            json = null
+          }
+        }
+        return { ok: res.ok, status: res.status, json }
+      } catch (e) {
+        return {
+          ok: false,
+          status: 0,
+          json: null,
+          error: e instanceof Error ? e.message : String(e),
+        }
+      }
+    },
+    username.trim(),
+    password
+  )
 }
 
 async function confirmSessionViaSettings(page: PageInstance): Promise<LetterboxdSessionCookie[] | null> {
@@ -147,17 +232,11 @@ async function confirmSessionViaSettings(page: PageInstance): Promise<Letterboxd
   }
 
   const html = await page.content()
-  if (htmlLooksLikeCloudflareInterstitial(html)) {
+  if (htmlLooksLikeCloudflareInterstitial(html) || !htmlLooksAuthed(html)) {
     return null
   }
 
-  try {
-    await page.waitForSelector('a[href*="sign-out"], [href*="/sign-out"]', { timeout: 15_000 })
-  } catch {
-    /* markup varies; cookie jar is authoritative */
-  }
-
-  const cookies = await readCookies(page)
+  const cookies = await readLetterboxdCookies(page)
   return hasMinimalLetterboxdSession(cookiesToJar(cookies)) ? cookies : null
 }
 
@@ -186,67 +265,48 @@ export async function letterboxdLoginViaPuppeteer(
       return null
     }
 
-    const user = username.trim()
-    const usernameSel = 'input[name="username"], input[name="email"], input[type="email"]'
-    const passwordSel = 'input[name="password"], input[type="password"]'
-    if (!(await page.$(usernameSel)) || !(await page.$(passwordSel))) {
-      console.error('Letterboxd puppeteer: login fields not found', await page.url())
+    console.log('Letterboxd puppeteer: posting login.do from browser context…')
+    const pageLogin = await postLoginFromPage(page, username, password)
+
+    if (isLoginJsonFailure(pageLogin.json)) {
+      console.error(
+        'Letterboxd puppeteer: login rejected:',
+        pageLogin.json?.message?.trim() || pageLogin.error || `http=${pageLogin.status}`
+      )
       return null
     }
 
-    await page.click(usernameSel, { clickCount: 3 })
-    await page.keyboard.press('Backspace')
-    await page.type(usernameSel, user, { delay: 25 })
-    await page.click(passwordSel, { clickCount: 3 })
-    await page.keyboard.press('Backspace')
-    await page.type(passwordSel, password, { delay: 25 })
-    await randomDelay(400, 900)
-
-    const loginResponsePromise = page.waitForResponse(
-      (r: { url: () => string; request: () => { method: () => string } }) =>
-        r.url().includes('login.do') && r.request().method() === 'POST',
-      { timeout: 45_000 }
-    )
-
-    const navigationPromise = page
-      .waitForNavigation({ waitUntil: 'networkidle2', timeout: 60_000 })
-      .catch(() => null)
-
-    await page.click('button[type="submit"], input[type="submit"]')
-
-    let loginJson: LoginJson | null = null
-    try {
-      const loginRes = await loginResponsePromise
-      loginJson = tryParseLoginResponse(await loginRes.text())
-      if (loginJson?.csrf) {
-        await page.setCookie({
-          name: 'com.xk72.webparts.csrf',
-          value: loginJson.csrf,
-          domain: '.letterboxd.com',
-          path: '/',
-        })
-      }
-    } catch {
-      /* login.do may not fire on serverless; validate via settings */
+    if (!isLoginJsonSuccess(pageLogin.json) && !pageLogin.ok) {
+      console.warn(
+        'Letterboxd puppeteer: login.do unexpected response',
+        pageLogin.error || `http=${pageLogin.status}`,
+        pageLogin.json?.message?.trim()
+      )
     }
 
-    await navigationPromise
-
-    if (isLoginJsonFailure(loginJson)) {
-      console.error('Letterboxd puppeteer: login rejected:', loginJson?.message?.trim())
-      return null
-    }
-
-    let cookies = await readCookies(page)
-    if (hasMinimalLetterboxdSession(cookiesToJar(cookies))) {
-      console.log('Letterboxd puppeteer: login succeeded (cookies on current page)')
+    if (await waitForMinimalSession(page)) {
+      const cookies = await readLetterboxdCookies(page)
+      console.log('Letterboxd puppeteer: login succeeded (in-page fetch)')
       return cookies
     }
 
-    if (isLoginJsonSuccess(loginJson) || (await waitForCsrfCookie(page))) {
-      cookies = await readCookies(page)
+    // Fallback: form submit (some environments block evaluate fetch)
+    const usernameSel = 'input[name="username"], input[name="email"], input[type="email"]'
+    const passwordSel = 'input[name="password"], input[type="password"]'
+    if ((await page.$(usernameSel)) && (await page.$(passwordSel))) {
+      console.log('Letterboxd puppeteer: retrying via form submit…')
+      const user = username.trim()
+      await page.click(usernameSel, { clickCount: 3 })
+      await page.keyboard.press('Backspace')
+      await page.type(usernameSel, user, { delay: 25 })
+      await page.click(passwordSel, { clickCount: 3 })
+      await page.keyboard.press('Backspace')
+      await page.type(passwordSel, password, { delay: 25 })
+      await page.click('button[type="submit"], input[type="submit"]')
+      await waitForMinimalSession(page, 25_000)
+      const cookies = await readLetterboxdCookies(page)
       if (hasMinimalLetterboxdSession(cookiesToJar(cookies))) {
-        console.log('Letterboxd puppeteer: login succeeded')
+        console.log('Letterboxd puppeteer: login succeeded (form)')
         return cookies
       }
     }
@@ -258,10 +318,21 @@ export async function letterboxdLoginViaPuppeteer(
       return settingsCookies
     }
 
-    const names = (await readCookies(page)).map((c) => c.name).join(', ')
+    const partial = await readLetterboxdCookies(page)
+    const names = partial.map((c) => c.name).join(', ')
+    const hasCf = partial.some((c) => c.name === 'cf_clearance')
+    if (hasCf && hasCsrfCookie(partial)) {
+      console.warn(
+        'Letterboxd puppeteer: no user session cookie; returning Cloudflare cookies for fetch login retry',
+        pageLogin.json?.message?.trim() || `cookies=[${names}] login.do=${pageLogin.status}`
+      )
+      return partial
+    }
+
     console.error(
-      'Letterboxd puppeteer: no session after submit',
-      loginJson?.message?.trim() || `cookies=[${names}] url=${await page.url()}`
+      'Letterboxd puppeteer: no authenticated session',
+      pageLogin.json?.message?.trim() ||
+        `cookies=[${names}] url=${await page.url()} login.do=${pageLogin.status}`
     )
     return null
   } catch (e) {
