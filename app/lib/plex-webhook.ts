@@ -10,6 +10,7 @@ import {
   isAllowedPlexEvent,
   plexWebhookIgnoredResponse,
 } from './plex-webhook-ingress.js';
+import { isPlexMovieMetadata } from './plex-metadata.js';
 
 export {
   getAllowedPlexEvents,
@@ -159,7 +160,7 @@ async function processScrobbleEvent(
     return Response.json({ message: 'Webhooks disabled for user' }, { status: 200 });
   }
 
-  if (settings.onlyMovies && eventData.Metadata?.librarySectionType !== 'movie') {
+  if (!isPlexMovieMetadata(eventData.Metadata)) {
     return Response.json({ message: 'Skipping non-movie content' }, { status: 200 });
   }
 

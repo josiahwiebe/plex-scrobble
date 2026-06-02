@@ -1,5 +1,6 @@
 import type { PlexWebhookEvent, LetterboxdFilm, LetterboxdWatchOptions, ScrobbleResult } from '../../types.js'
 import type { LetterboxdSessionCookie, WebhookSettings } from './schema.js'
+import { isPlexMovieMetadata } from './plex-metadata.js'
 import { letterboxdLoginViaPuppeteer } from './letterboxd-puppeteer-login.js'
 import {
   buildFilmSearchUrl,
@@ -482,6 +483,14 @@ export class LetterboxdScraper {
   async logFilmFromPlex(plexEvent: PlexWebhookEvent, webhookSettings?: WebhookSettings): Promise<ScrobbleResult> {
     const metadata = plexEvent.Metadata
 
+    if (!isPlexMovieMetadata(metadata)) {
+      return {
+        success: false,
+        reason: 'non_movie',
+        message: 'Content is not a movie, skipping',
+      }
+    }
+
     if (webhookSettings) {
       if (!webhookSettings.enabled) {
         return { success: false, reason: 'webhooks_disabled', message: 'Webhooks are disabled in settings' }
@@ -499,10 +508,6 @@ export class LetterboxdScraper {
       if (plexEvent.event === 'media.rate' && !webhookSettings.events.rate) {
         return { success: false, reason: 'event_disabled', message: 'Rate events are disabled in settings' }
       }
-    }
-
-    if (metadata.librarySectionType !== 'movie') {
-      return { success: false, reason: 'non_movie', message: 'Content is not a movie, skipping' }
     }
 
     const title = metadata.title
