@@ -144,6 +144,23 @@ async function readLetterboxdCookies(page: PageInstance): Promise<LetterboxdSess
     .map((c: { name: string; value: string }) => ({ name: c.name, value: c.value }))
 }
 
+async function readCsrfFromPageCookies(page: PageInstance): Promise<string | null> {
+  const cookies = await readLetterboxdCookies(page)
+  return cookies.find((c) => c.name === 'com.xk72.webparts.csrf')?.value ?? null
+}
+
+async function waitForCsrfToken(page: PageInstance, timeoutMs = 20_000): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const csrf = await readCsrfFromPageCookies(page)
+    if (csrf) {
+      return csrf
+    }
+    await sleep(400)
+  }
+  return null
+}
+
 async function waitForMinimalSession(page: PageInstance, timeoutMs = 35_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -162,35 +179,26 @@ async function waitForMinimalSession(page: PageInstance, timeoutMs = 35_000): Pr
 async function postLoginFromPage(
   page: PageInstance,
   username: string,
-  password: string
+  password: string,
+  csrf: string
 ): Promise<PageLoginResult> {
   return page.evaluate(
-    async (user: string, pass: string) => {
-      const readCsrf = () => {
-        const match = document.cookie
-          .split('; ')
-          .find((c) => c.startsWith('com.xk72.webparts.csrf='))
-        return match ? decodeURIComponent(match.split('=').slice(1).join('=')) : null
-      }
-
-      const csrf = readCsrf()
-      if (!csrf) {
-        return { ok: false, status: 0, json: null, error: 'missing_csrf_cookie' }
-      }
-
+    async (user: string, pass: string, csrfToken: string) => {
       const body = new URLSearchParams({
-        __csrf: csrf,
+        __csrf: csrfToken,
         username: user,
         password: pass,
         remember: 'true',
       })
 
       try {
-        const res = await fetch('/user/login.do', {
+        const res = await fetch('https://letterboxd.com/user/login.do', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             Accept: 'application/json, text/javascript, */*; q=0.01',
+            Origin: 'https://letterboxd.com',
+            Referer: 'https://letterboxd.com/sign-in/',
             'X-Requested-With': 'XMLHttpRequest',
           },
           body: body.toString(),
@@ -216,7 +224,8 @@ async function postLoginFromPage(
       }
     },
     username.trim(),
-    password
+    password,
+    csrf
   )
 }
 
@@ -265,8 +274,19 @@ export async function letterboxdLoginViaPuppeteer(
       return null
     }
 
+    let csrf = await waitForCsrfToken(page)
+    if (!csrf) {
+      await page.reload({ waitUntil: 'networkidle2', timeout: 60_000 })
+      await waitForCloudflare(page)
+      csrf = await waitForCsrfToken(page)
+    }
+    if (!csrf) {
+      console.error('Letterboxd puppeteer: CSRF cookie not present after sign-in (HttpOnly — read via Puppeteer)')
+      return null
+    }
+
     console.log('Letterboxd puppeteer: posting login.do from browser context…')
-    const pageLogin = await postLoginFromPage(page, username, password)
+    const pageLogin = await postLoginFromPage(page, username, password, csrf)
 
     if (isLoginJsonFailure(pageLogin.json)) {
       console.error(
@@ -280,8 +300,17 @@ export async function letterboxdLoginViaPuppeteer(
       console.warn(
         'Letterboxd puppeteer: login.do unexpected response',
         pageLogin.error || `http=${pageLogin.status}`,
-        pageLogin.json?.message?.trim()
+        pageLogin.json?.message?.trim() || ''
       )
+    }
+
+    if (pageLogin.json?.csrf) {
+      await page.setCookie({
+        name: 'com.xk72.webparts.csrf',
+        value: pageLogin.json.csrf,
+        domain: '.letterboxd.com',
+        path: '/',
+      })
     }
 
     if (await waitForMinimalSession(page)) {

@@ -287,12 +287,28 @@ export class LetterboxdScraper {
     return false
   }
 
+  /** Refresh CSRF (and any Set-Cookie) from the sign-in page while keeping cf_clearance. */
+  private async refreshCsrfFromSignIn(): Promise<boolean> {
+    const res = await this.rawFetch('https://letterboxd.com/sign-in/', { redirect: 'follow' })
+    mergeResponseCookies(res, this.jar)
+    const html = await res.text()
+    if (isCloudflareChallenge(html, res.status, res.headers)) {
+      return false
+    }
+    return Boolean(this.jar.get('com.xk72.webparts.csrf'))
+  }
+
   /**
    * POST login.do using cookies already in the jar (e.g. cf_clearance from Puppeteer).
    */
   private async postLoginWithJar(username: string, password: string): Promise<boolean> {
+    if (!this.jar.get('com.xk72.webparts.csrf')) {
+      await this.refreshCsrfFromSignIn()
+    }
+
     const csrf = this.jar.get('com.xk72.webparts.csrf')
     if (!csrf) {
+      console.error('Letterboxd fetch login: missing CSRF after sign-in refresh')
       return false
     }
 
@@ -331,7 +347,14 @@ export class LetterboxdScraper {
       this.jar.set('com.xk72.webparts.csrf', json.csrf)
       this.csrfToken = json.csrf
     }
-    return isLoginJsonSuccess(json) || this.hasEstablishedSession()
+    const ok = isLoginJsonSuccess(json) || this.hasEstablishedSession()
+    if (!ok) {
+      console.error(
+        'Letterboxd fetch login: no session after login.do',
+        json ? `result=${String(json.result)}` : text.slice(0, 200)
+      )
+    }
+    return ok
   }
 
   private async browserFallbackLogin(username: string, password: string): Promise<boolean> {
@@ -355,6 +378,7 @@ export class LetterboxdScraper {
     // Puppeteer often yields cf_clearance + csrf only — complete login via fetch in Node.
     if (this.jar.has('cf_clearance')) {
       console.log('Letterboxd: completing login via fetch using Cloudflare cookies from browser…')
+      await this.refreshCsrfFromSignIn()
       if ((await this.postLoginWithJar(username, password)) && this.hasEstablishedSession()) {
         return true
       }
